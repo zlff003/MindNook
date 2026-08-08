@@ -1,0 +1,68 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Build and package artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Runtime data and generated files
+data/chroma/
+data/snapshots/
+data/exports/
+*.log
+*.pid
+*.sqlite
+*.sqlite3
+*.db
+*.xlsx
+
+# Local uploads and temporary files
+uploads/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# IDE and editor settings
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local Docker overrides
+docker-compose.override.yml

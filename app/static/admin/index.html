@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="MindNook 心理支持报告与风险个案管理端"
+    />
+    <title>MindNook · 管理端</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section id="loginView" class="login-view">
+        <div class="login-story">
+          <div>
+            <div class="brand">
+              <span class="brand-mark" aria-hidden="true">M</span>
+              <span>MindNook</span>
+            </div>
+            <h1>让每一次求助都有回音。</h1>
+            <p class="lead">
+              汇总心理支持报告、风险个案与预警状态，帮助管理员及时完成必要跟进。
+            </p>
+          </div>
+          <p class="login-note">
+            管理端包含敏感信息。请仅在确有工作需要时查看，并遵循学校的数据与隐私政策。
+          </p>
+        </div>
+        <div class="login-panel">
+          <form id="loginForm">
+            <p class="eyebrow">管理空间</p>
+            <h2>管理员登录</h2>
+            <p class="form-copy">访问工作台、报告、个案和运行状态。</p>
+            <div class="field">
+              <label for="username">账号</label>
+              <input id="username" name="username" autocomplete="username" required />
+            </div>
+            <div class="field">
+              <label for="password">密码</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </div>
+            <p id="loginError" class="form-error" role="alert"></p>
+            <button class="primary-btn" type="submit">进入管理端</button>
+            <p class="demo-hint">本地演示账号：admin / admin123</p>
+          </form>
+        </div>
+      </section>
+
+      <section id="appView" class="admin-shell hidden">
+        <aside id="adminSidebar" class="admin-sidebar">
+          <div class="admin-sidebar-head">
+            <div class="brand">
+              <span class="brand-mark" aria-hidden="true">M</span>
+              <span>MindNook</span>
+            </div>
+            <button id="closeMenuButton" class="icon-text-btn mobile-only" type="button">
+              关闭
+            </button>
+          </div>
+
+          <p class="nav-label">管理工作区</p>
+          <nav class="admin-nav" aria-label="管理端主导航">
+            <a href="#/overview" data-route="overview">
+              <span class="nav-index">01</span><span>工作台</span>
+            </a>
+            <a href="#/reports" data-route="reports">
+              <span class="nav-index">02</span><span>心理报告</span>
+            </a>
+            <a href="#/cases" data-route="cases">
+              <span class="nav-index">03</span><span>风险个案</span>
+            </a>
+            <a href="#/alerts" data-route="alerts">
+              <span class="nav-index">04</span><span>预警中心</span>
+            </a>
+            <a href="#/operations" data-route="operations">
+              <span class="nav-index">05</span><span>系统运行</span>
+            </a>
+          </nav>
+
+          <div class="admin-sidebar-foot">
+            <div class="admin-user">
+              <span class="admin-avatar" aria-hidden="true">管</span>
+              <div>
+                <p id="adminName">管理员</p>
+                <span>授权管理账号</span>
+              </div>
+            </div>
+            <button id="logoutButton" class="ghost-btn sidebar-logout" type="button">
+              退出登录
+            </button>
+          </div>
+        </aside>
+        <button id="sidebarBackdrop" class="sidebar-backdrop hidden" type="button" aria-label="关闭导航"></button>
+
+        <div class="admin-workspace">
+          <header class="admin-header">
+            <button id="openMenuButton" class="icon-text-btn mobile-only" type="button">
+              菜单
+            </button>
+            <div class="admin-page-heading">
+              <p id="pageEyebrow" class="eyebrow">工作概览</p>
+              <h1 id="pageTitle">安全跟进工作台</h1>
+              <p id="pageDescription">聚焦需要管理员关注的报告、个案和系统状态。</p>
+            </div>
+            <button id="refreshButton" class="primary-btn compact-btn" type="button">
+              刷新本页
+            </button>
+          </header>
+
+          <div id="pageStatus" class="page-status" role="status" aria-live="polite"></div>
+
+          <section class="admin-page" data-page="overview" aria-labelledby="pageTitle">
+            <div class="metric-grid" aria-label="概览指标">
+              <button class="metric-card metric-link" type="button" data-nav="reports">
+                <span class="metric-label">心理支持报告</span>
+                <strong id="reportCount" class="metric-value">—</strong>
+                <span class="metric-action">查看全部报告</span>
+              </button>
+              <button class="metric-card metric-link" type="button" data-nav="reports" data-risk="high">
+                <span class="metric-label">高风险事件</span>
+                <strong id="highRiskCount" class="metric-value danger-value">—</strong>
+                <span class="metric-action">优先查看</span>
+              </button>
+              <button class="metric-card metric-link" type="button" data-nav="cases">
+                <span class="metric-label">待跟进个案</span>
+                <strong id="openCaseCount" class="metric-value">—</strong>
+                <span class="metric-action">进入个案中心</span>
+              </button>
+              <button class="metric-card metric-link" type="button" data-nav="operations">
+                <span class="metric-label">异常后台任务</span>
+                <strong id="failedJobCount" class="metric-value">—</strong>
+                <span class="metric-action">检查系统运行</span>
+              </button>
+            </div>
+
+            <div class="overview-grid">
+              <section class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="panel-kicker">优先处理</p>
+                    <h2>最近高风险报告</h2>
+                  </div>
+                  <a class="text-link" href="#/reports">查看全部</a>
+                </div>
+                <div id="overviewRiskList" class="stack"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="panel-kicker">持续跟进</p>
+                    <h2>未关闭个案</h2>
+                  </div>
+                  <a class="text-link" href="#/cases">进入个案中心</a>
+                </div>
+                <div id="overviewCaseList" class="stack"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="admin-page hidden" data-page="reports" aria-labelledby="pageTitle">
+            <section class="panel page-panel">
+              <div class="panel-header filter-header">
+                <div>
+                  <p class="panel-kicker">智能生成 · 人工复核</p>
+                  <h2>心理支持报告</h2>
+                </div>
+                <label class="compact-field">
+                  <span>风险等级</span>
+                  <select id="riskFilter">
+                    <option value="">全部等级</option>
+                    <option value="high">高风险</option>
+                    <option value="medium">中风险</option>
+                    <option value="low">低风险</option>
+                  </select>
+                </label>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>学生</th>
+                      <th>情绪与原因摘要</th>
+                      <th>对话类型</th>
+                      <th>风险等级</th>
+                      <th>生成时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="reportRows"></tbody>
+                </table>
+              </div>
+              <div id="reportPagination" class="pagination"></div>
+            </section>
+          </section>
+
+          <section class="admin-page hidden" data-page="cases" aria-labelledby="pageTitle">
+            <section class="panel page-panel">
+              <div class="panel-header filter-header">
+                <div>
+                  <p class="panel-kicker">人工跟进闭环</p>
+                  <h2>风险个案</h2>
+                </div>
+                <label class="compact-field">
+                  <span>个案状态</span>
+                  <select id="caseStatusFilter">
+                    <option value="">全部状态</option>
+                    <option value="pending">待处理</option>
+                    <option value="notified">已通知</option>
+                    <option value="assigned">已分配</option>
+                    <option value="following">跟进中</option>
+                    <option value="closed">已关闭</option>
+                  </select>
+                </label>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>风险</th>
+                      <th>交接摘要</th>
+                      <th>状态</th>
+                      <th>创建时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="caseRows"></tbody>
+                </table>
+              </div>
+              <div id="casePagination" class="pagination"></div>
+            </section>
+          </section>
+
+          <section class="admin-page hidden" data-page="alerts" aria-labelledby="pageTitle">
+            <section class="panel page-panel">
+              <div class="panel-header filter-header">
+                <div>
+                  <p class="panel-kicker">风险触达记录</p>
+                  <h2>预警中心</h2>
+                </div>
+                <label class="compact-field">
+                  <span>发送状态</span>
+                  <select id="alertStatusFilter">
+                    <option value="">全部状态</option>
+                    <option value="sent">已发送</option>
+                    <option value="failed">发送失败</option>
+                    <option value="pending">待发送</option>
+                  </select>
+                </label>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>状态</th>
+                      <th>渠道</th>
+                      <th>预警摘要</th>
+                      <th>创建时间</th>
+                    </tr>
+                  </thead>
+                  <tbody id="alertRows"></tbody>
+                </table>
+              </div>
+              <div id="alertPagination" class="pagination"></div>
+            </section>
+          </section>
+
+          <section class="admin-page hidden" data-page="operations" aria-labelledby="pageTitle">
+            <div class="operation-tabs" role="tablist" aria-label="系统运行分类">
+              <button id="jobsTab" class="operation-tab active" type="button" role="tab" aria-selected="true" data-operation-tab="jobs">
+                后台任务
+              </button>
+              <button id="runsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="runs">
+                Agent 运行
+              </button>
+            </div>
+
+            <section id="jobsPanel" class="panel page-panel operation-panel" role="tabpanel">
+              <div class="panel-header filter-header">
+                <div>
+                  <p class="panel-kicker">异步工具任务</p>
+                  <h2>后台任务</h2>
+                </div>
+                <label class="compact-field">
+                  <span>任务状态</span>
+                  <select id="jobStatusFilter">
+                    <option value="">全部状态</option>
+                    <option value="pending">等待执行</option>
+                    <option value="running">执行中</option>
+                    <option value="succeeded">已完成</option>
+                    <option value="dead_letter">异常任务</option>
+                  </select>
+                </label>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>任务类型</th>
+                      <th>状态</th>
+                      <th>尝试次数</th>
+                      <th>异常信息</th>
+                      <th>创建时间</th>
+                    </tr>
+                  </thead>
+                  <tbody id="jobRows"></tbody>
+                </table>
+              </div>
+              <div id="jobPagination" class="pagination"></div>
+            </section>
+
+            <section id="runsPanel" class="panel page-panel operation-panel hidden" role="tabpanel">
+              <div class="panel-header">
+                <div>
+                  <p class="panel-kicker">多 Agent 推理审计</p>
+                  <h2>Agent 运行记录</h2>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>路由</th>
+                      <th>最终风险</th>
+                      <th>模型调用</th>
+                      <th>运行状态</th>
+                      <th>总耗时</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="agentRunRows"></tbody>
+                </table>
+              </div>
+              <div id="runPagination" class="pagination"></div>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <aside id="detailDrawer" class="detail-drawer" aria-hidden="true" aria-labelledby="drawerTitle">
+      <button id="drawerBackdrop" class="drawer-backdrop" type="button" aria-label="关闭详情"></button>
+      <section class="drawer-panel" tabindex="-1">
+        <div class="drawer-header">
+          <div>
+            <p id="drawerEyebrow" class="eyebrow">详细信息</p>
+            <h2 id="drawerTitle">详情</h2>
+          </div>
+          <button id="closeDrawerButton" class="icon-text-btn" type="button">关闭</button>
+        </div>
+        <div id="drawerContent" class="drawer-content"></div>
+      </section>
+    </aside>
+
+    <dialog id="confirmDialog" class="admin-dialog">
+      <form method="dialog">
+        <p class="eyebrow">操作确认</p>
+        <h2 id="confirmTitle">确认操作</h2>
+        <p id="confirmMessage" class="dialog-copy"></p>
+        <div class="dialog-actions">
+          <button class="ghost-btn dialog-cancel" value="cancel">取消</button>
+          <button id="confirmAcceptButton" class="primary-btn compact-btn" value="confirm">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="noteDialog" class="admin-dialog">
+      <form id="noteForm">
+        <p class="eyebrow">跟进记录</p>
+        <h2>添加个案备注</h2>
+        <label class="field" for="caseNote">
+          <span>备注内容</span>
+          <textarea id="caseNote" rows="5" maxlength="2000" required></textarea>
+        </label>
+        <p id="noteError" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancelNoteButton" class="ghost-btn" type="button">取消</button>
+          <button class="primary-btn compact-btn" type="submit">保存备注</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/admin/admin.js" defer></script>
+  </body>
+</html>

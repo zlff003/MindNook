@@ -1,0 +1,2 @@
+"""MindNook application package."""
+

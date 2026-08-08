@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="MindNook 校园心理关怀与日常问答空间"
+    />
+    <title>MindNook · 学生端</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section id="loginView" class="login-view">
+        <div class="login-story">
+          <div>
+            <div class="brand">
+              <span class="brand-mark" aria-hidden="true">M</span>
+              <span>MindNook</span>
+            </div>
+            <h1>给心情留一处安静角落。</h1>
+            <p class="lead">
+              无论是学习、关系、睡眠，还是一段说不清的低落，都可以从一句话开始。
+            </p>
+          </div>
+          <p class="login-note">
+            MindNook 是辅助支持工具，不能替代心理咨询或医疗服务。若你正处于即时危险中，
+            请优先联系身边可信任的人、学校正式支持渠道或当地紧急服务。
+          </p>
+        </div>
+        <div class="login-panel">
+          <form id="loginForm">
+            <p class="eyebrow">学生空间</p>
+            <h2>欢迎回来</h2>
+            <p class="form-copy">登录后继续你的私人对话空间。</p>
+            <div class="field">
+              <label for="username">账号</label>
+              <input id="username" name="username" autocomplete="username" required />
+            </div>
+            <div class="field">
+              <label for="password">密码</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </div>
+            <p id="loginError" class="form-error" role="alert"></p>
+            <button class="primary-btn" type="submit">进入 MindNook</button>
+            <p class="demo-hint">本地演示账号：student / student123</p>
+          </form>
+        </div>
+      </section>
+
+      <section id="appView" class="app-view hidden">
+        <aside class="sidebar">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">M</span>
+            <span>MindNook</span>
+          </div>
+          <button id="newChatButton" class="primary-btn new-chat" type="button">
+            ＋ 新对话
+          </button>
+          <p class="conversation-label">最近对话</p>
+          <nav
+            id="conversationList"
+            class="conversation-list"
+            aria-label="历史会话"
+          ></nav>
+          <div class="sidebar-footer">
+            <p id="userName" class="user-name"></p>
+            <p class="user-role">学生端</p>
+            <button id="logoutButton" class="ghost-btn" type="button">退出</button>
+          </div>
+        </aside>
+
+        <section class="chat-main">
+          <header class="chat-header">
+            <h1 id="conversationTitle">新的对话</h1>
+            <span class="safety-pill">安全场景可能触发人工跟进</span>
+          </header>
+          <div id="messages" class="messages" aria-live="polite">
+            <div id="welcome" class="welcome">
+              <p class="eyebrow">今天想聊些什么？</p>
+              <h2>慢一点，也没关系。</h2>
+              <p>
+                你可以问日常问题，也可以说说最近的压力。这里不会给你贴标签，
+                我们从眼前的一小步开始。
+              </p>
+              <div class="chips" aria-label="快捷表达">
+                <button class="chip" type="button">最近考试压力很大</button>
+                <button class="chip" type="button">晚上总是睡不着</button>
+                <button class="chip" type="button">和室友相处得不太好</button>
+                <button class="chip" type="button">帮我梳理一下学习计划</button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-wrap">
+            <form id="composer" class="composer">
+              <textarea
+                id="messageInput"
+                rows="1"
+                maxlength="4000"
+                placeholder="写下你此刻想说的话…"
+                aria-label="消息内容"
+                required
+              ></textarea>
+              <button id="sendButton" class="primary-btn send-btn" type="submit">
+                发送
+              </button>
+            </form>
+            <p id="composerStatus" class="composer-note">
+              回答仅供支持与参考，不构成诊断或治疗建议。
+            </p>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="/static/student/student.js" defer></script>
+  </body>
+</html>
+

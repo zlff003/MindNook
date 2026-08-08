@@ -1,0 +1,2 @@
+"""MindNook automated tests."""
+
