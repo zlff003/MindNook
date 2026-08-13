@@ -97,10 +97,9 @@ AgentHarness
 
 | 最终路由 | RAG | 心理报告 | 工具计划 |
 |---|---|---|---|
-| `general` | 不调用 | 不生成 | 无 |
-| `psychological_support` + low | 调用 | 生成 | `ledger_write` |
-| `psychological_support` + medium | 调用 | 生成 | `ledger_write + case_create` |
-| `safety_risk` / high | 调用并补充固定安全检索主题 | 生成 | `ledger_write + case_create + alert_send` |
+| `CHAT` | 不调用 | 不生成 | 无 |
+| `CONSULT` | 调用 | 生成 | `ledger_write` |
+| `RISK` | 调用并补充固定安全检索主题 | 生成 | `ledger_write + case_create + alert_send` |
 
 ### 2.1 最终结果落库与副作用
 
@@ -160,15 +159,17 @@ sequence / event_type / actor / task_id / payload
 
 4. PsychologicalReport
 
-只有最终路由不是 `general` 时才创建心理报告。报告关联学生、会话和来源消息，并保存：
+只有最终 `risk_level` 不是 `CHAT` 时才创建心理报告。报告关联学生、会话和来源消息，并保存：
 
 ```text
-dialogue_type
 emotion_summary
 risk_level
 confidence
 reason_summary
+handoff_summary
 ```
+
+`handoff_summary` 由 `counselor_handoff_summary` Skill 的固定模板生成，包含报告 ID、学生身份、风险等级、情绪标签、置信度、模型摘要、跟进建议和必要的原始表达摘录。它仅供工作人员查看，不进入学生端回复 Prompt；历史缺失摘要在应用启动时幂等回填。
 
 普通问答不会生成心理报告，也不会进入心理风险工具链。
 
@@ -177,9 +178,9 @@ reason_summary
 Harness 根据最终风险生成工具计划，并通过 `enqueue_report_jobs()` 将计划写为数据库中的持久化任务：
 
 ```text
-low     → ledger_write
-medium  → ledger_write + case_create
-high    → ledger_write + case_create + alert_send
+CHAT    → 无
+CONSULT → ledger_write
+RISK    → ledger_write + case_create + alert_send
 ```
 
 此时只会幂等创建 `ToolJob(status="PENDING")`，并不会在数据库事务内部写 Excel、创建个案或发送预警。高风险的 `ALERT_SEND` 通过 `depends_on_job_id` 依赖 `CASE_CREATE`。这样可以避免数据库事务回滚后已经产生外部副作用。
@@ -318,59 +319,43 @@ MODEL_PROVIDER=bailian    → OpenAICompatibleModelProvider，调用配置的模
 
 单元测试通过依赖注入使用 `RecordingModelProvider(MockModelProvider)`，因此确定、离线且不消耗 API Token。
 
-独立 Runner 使用 `get_settings()` 和 `build_model_provider()`，所以会遵循当前 `.env`：
-
-- 配置为 `mock` 时运行固定 Mock 返回；
-- 配置为 `bailian` 或 `openai_compatible` 且凭据有效时调用真实模型；
-- 模型调用失败时 Runtime 可以生成安全降级回复，并在步骤和 Trace 中记录失败或降级。
-
-`--require-model` 的准确语义是：当 Runner 发现错误事件或失败的模型步骤时返回非零退出码。它不会主动断言 Provider 一定不是 Mock，也不会评价回复内容质量。因此在需要真实模型冒烟测试时，应同时明确检查 `MODEL_PROVIDER` 和 Runner 输出中的 `provider`、`steps`、`degraded` 字段。
+Engineering Runner 固定使用 `MockModelProvider`，以保证离线、确定、无需 API Token。
+真实模型连通性与回答质量不属于一键工程回归，需另行执行 Provider 冒烟和人工评审。
 
 ## 7. 独立 Runner
 
-Runner 提供三个固定场景：
+Runner 提供六类固定套件：
 
-| 场景 | 输入意图 | 预期链路 |
+| 套件 | 验证链路 |
 |---|---|---|
-| `general` | Python 普通问答 | 普通路由，不需要 RAG 和心理报告 |
-| `support` | 考试压力并伴随睡眠困扰 | 心理支持、RAG、心理报告和台账 |
-| `high` | 明确自杀表达 | 高风险安全链路、RAG、报告、个案和预警 |
+| `risk-safety` | 高风险识别、报告、元数据隔离和工具入队 |
+| `agent-routing` | CHAT / CONSULT / RISK 与 Agent 步骤 |
+| `standard-skills` | 标准 Skill 校验、选择和 Workflow 注入 |
+| `rag` | 100 条评测集与召回指标 |
+| `api` | 健康、认证授权、SSE、管理员知识库接口 |
+| `tool-queue` | Excel、case、alert DAG、幂等、限流和死信 |
 
 运行方式：
 
 ```bash
-python -m app.harness.runner --scenario general
-python -m app.harness.runner --scenario support
-python -m app.harness.runner --scenario high
+python -m app.harness.runner
+python -m app.harness.runner --json
+python -m app.harness.runner --suite risk-safety --suite tool-queue
 ```
 
-要求模型步骤无失败：
-
-```bash
-python -m app.harness.runner --scenario support --require-model
-```
-
-Runner 使用临时 SQLite 数据库和临时风险台账文件，不污染正式数据库。输出 JSON 包含：
+每个套件独立使用临时 SQLite、内存短期记忆、临时 RAG 索引和临时 Excel，
+不污染正式环境。JSON 输出包含：
 
 ```text
 ok
-scenario
-provider
-route
-risk_level
-model_calls
-degraded
-total_latency_ms
-public_events
-internal_events
-records
-steps
-errors
+environment
+summary
+suites[].passed
+suites[].duration_ms
+suites[].checks[].metrics
 ```
 
-`records` 会统计消息、Agent Run、协作事件、Trace、心理报告、后台任务、台账、风险个案、预警记录以及 Excel 台账是否生成。
-
-未传 `--require-model` 时，Runner 即使输出 `ok=false` 也可能以退出码 0 结束，适合人工诊断；CI 或自动化冒烟测试应使用 `--require-model` 并同时检查 JSON 输出。
+任一套件失败时退出码为非零，可直接作为 CI 门禁。
 
 ## 8. RAG 在 Harness 中的范围
 
@@ -391,18 +376,19 @@ errors
 - RAG 异常是否降级为内置关键词知识；
 - RAG 上下文是否贯穿到回复与 Trace。
 
-Harness 不运行 100 条 RAG 评测集，也不计算 Hit@1、Recall@3、MRR@3、nDCG@3、阶段增益或证据召回。检索质量需要单独运行：
+Engineering Harness 会运行 100 条 RAG 评测集，并报告 Hit@1、Recall@3、MRR@3、
+nDCG@3、安全召回与重复率。它使用稳定工程回归底线；更严格的发布验收仍单独运行：
 
 ```bash
 python -m app.rag.evaluation --evaluate-answers
 python -m app.rag.evaluation --evaluate-answers --strict
 ```
 
-因此两条链路的职责是：
+因此两层门禁的职责是：
 
 ```text
-AgentHarness：验证 RAG 在业务流程中能触发、能注入、能降级
-RAG Evaluation：验证检索是否准确、各阶段是否产生增益
+Engineering Harness：可重复的一键工程回归和召回指标底线
+RAG Evaluation --strict：更高阈值的发布级检索验收
 ```
 
 ## 9. 自动测试覆盖
@@ -442,10 +428,10 @@ python -m pytest -q
 | 回复生成与输出安全审查 | 已覆盖 |
 | 消息、报告、Trace 和工具计划 | 已覆盖 |
 | 幂等与稳定业务错误 | 已覆盖 |
-| 真实模型 API 冒烟 | Runner 按配置支持 |
-| RAG 排名与证据质量 | 由独立 RAG Evaluation 覆盖 |
+| 真实模型 API 冒烟 | 不属于确定性 Engineering Harness，需另行验证 |
+| RAG 排名与证据质量 | Engineering Harness 回归底线 + 独立严格评测 |
 | 回答同理心、事实性和建议质量 | 尚需批量真实模型评测与人工盲审 |
-| HTTP、认证和真实 SSE 连接 | 不在独立 Runner 内，API 测试另行覆盖 |
+| HTTP、认证和 SSE 协议 | API Harness 已覆盖 TestClient 链路 |
 | 真实 MySQL、Redis、异步 Worker | Runner 使用临时数据库和进程内工具执行器 |
 | 浏览器和前端 UI | 未覆盖 |
 | 并发、压测、故障注入和长时间稳定性 | 未形成独立 Harness |
@@ -458,10 +444,8 @@ python -m pytest -q
 # 1. 单元与集成测试
 python -m pytest -q
 
-# 2. 三条业务链路冒烟
-python -m app.harness.runner --scenario general --require-model
-python -m app.harness.runner --scenario support --require-model
-python -m app.harness.runner --scenario high --require-model
+# 2. 六类一键工程验证
+python -m app.harness.runner
 
 # 3. RAG 检索质量
 python -m app.rag.evaluation --evaluate-answers --strict

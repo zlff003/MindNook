@@ -28,6 +28,7 @@ class MemoryContext:
     cache_hit: bool
     total_messages: int
     cached_messages: int
+    history_compressed: bool = False
 
     @property
     def memoryBrief(self) -> str:
@@ -47,4 +48,5 @@ class MemoryContext:
             cache_hit=False,
             total_messages=0,
             cached_messages=0,
+            history_compressed=False,
         )

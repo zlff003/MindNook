@@ -1,5 +1,9 @@
 # MCP 与异步工具队列
 
+> 文档版本：1.0  
+> 更新日期：2026-08-08  
+> 主要实现：`app/services/jobs.py`、`app/services/tool_dispatcher.py`、`app/tools/operations.py`、`app/mcp/`
+
 ## 1. 目标与边界
 
 聊天主链路只负责生成并提交心理报告和工具任务，不直接执行 Excel、个案或邮件操作。生产环境的 `ThreadedToolDispatcher` 在提交后被唤醒，学生端 SSE 可以继续输出；工具执行失败不会回滚已经提交的助手消息和心理报告。

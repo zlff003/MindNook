@@ -28,7 +28,6 @@ LEDGER_HEADERS = (
     "report_id",
     "student_id",
     "created_at",
-    "dialogue_type",
     "risk_level",
     "confidence",
     "emotion_summary",
@@ -101,7 +100,6 @@ class ToolOperations:
                         report.public_id,
                         student_public_id,
                         report.created_at.isoformat(),
-                        report.dialogue_type,
                         report.risk_level,
                         report.confidence,
                         report.emotion_summary,
@@ -168,10 +166,7 @@ class ToolOperations:
                 student_id=report.student_id,
                 risk_level=report.risk_level,
                 status="pending",
-                handoff_summary=(
-                    f"{report.emotion_summary} {report.reason_summary} "
-                    "建议管理员确认学生当前安全、是否有人陪伴，并按校内流程跟进。"
-                ),
+                handoff_summary=report.handoff_summary,
             )
             db.add(risk_case)
             db.flush()
@@ -180,7 +175,7 @@ class ToolOperations:
                     case_id=risk_case.id,
                     event_type="created",
                     to_status="pending",
-                    content="系统根据中高风险报告自动创建个案。",
+                    content="系统根据 RISK 报告自动创建个案。",
                 )
             )
             db.commit()

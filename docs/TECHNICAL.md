@@ -1,7 +1,7 @@
 # MindNook 技术文档
 
-> 文档版本：1.0  
-> 更新日期：2026-07-30
+> 文档版本：1.1  
+> 更新日期：2026-08-08
 
 ## 1. 系统概述
 
@@ -49,10 +49,10 @@ flowchart LR
 - `app/harness`：会话解析、输入脱敏、Runtime 调用、消息/报告/Trace 落库与工具计划。
 - `app/agents`：无 HTTP、无数据库依赖的事件驱动多 Agent Runtime。
 - `app/services`：模型网关、后台任务和工具执行服务。
-- `app/models`：数据库实体。
-- `app/schemas`：接口数据结构。
+- `app/models.py`：数据库实体。
+- `app/schemas.py`：接口数据结构。
 - `app/static`：学生端、管理端和登录页面。
-- `app/knowledge`：内置心理知识。
+- `app/agents/knowledge.py`：内置心理知识。
 - `skills`：标准心理支持规则。
 
 ## 4. 核心处理流程
@@ -99,7 +99,7 @@ MySQL 保存：
 
 Redis 使用 `mindbridge:short-term-memory:<session_public_id>` 保存最近 40 条脱敏消息，TTL 为 86400 秒。Redis 未命中或不可用时，从 MySQL `chat_messages` 回填最近 40 条。
 
-长会话将较早历史压缩为最多 1200 字符的 `memoryBrief`，并保留最近 8 条带角色脱敏原文作为受 6000 字符预算约束的 `modelHistory`。手机号、邮箱和身份证号等信息在进入模型和短期记忆前进行脱敏。
+长会话将较早历史按固定规则压缩为最多 500 字符的 `memoryBrief`：最多摘录最近 4 条学生关注、3 条助手支持和本轮输入；同时保留最近 8 条带角色脱敏原文作为受 6000 字符预算约束的 `modelHistory`。历史超过 8 条时摘要以 system 消息进入 Prompt，短历史则只保留角色化原文。手机号、邮箱和身份证号等信息在进入模型和短期记忆前进行脱敏。
 
 各 Agent 使用 `agent:<AgentName>:<session_public_id>` 隔离私有记忆；审计型记忆写入 `agent_run_traces`，不会回流到下一轮 Prompt。
 
@@ -124,16 +124,15 @@ Redis 使用 `mindbridge:short-term-memory:<session_public_id>` 保存最近 40 
 
 | 场景 | 报告 | Excel | 个案 | 预警 |
 |---|---:|---:|---:|---:|
-| 普通交流 | 否 | 否 | 否 | 否 |
-| 低风险心理支持 | 是 | 是 | 否 | 否 |
-| 中风险 | 是 | 是 | 是 | 否 |
-| 高风险 | 是 | 是 | 是 | 是 |
+| `CHAT` | 否 | 否 | 否 | 否 |
+| `CONSULT` | 是 | 是 | 否 | 否 |
+| `RISK` | 是 | 是 | 是 | 是 |
 
 后台任务具有幂等、依赖、重试和死信机制：
 
 - Excel 任务负责写入风险台账。
-- 中高风险任务创建个案。
-- 高风险预警在个案创建成功后发送。
+- `RISK` 任务创建个案。
+- `RISK` 预警在个案创建成功后发送。
 - 任务多次失败后写入死信，供管理员处理。
 - 服务重启后会恢复未完成任务。
 

@@ -38,6 +38,7 @@ const state = {
   alerts: [],
   jobs: [],
   runs: [],
+  skills: [],
   noteCaseId: null,
 };
 
@@ -112,7 +113,7 @@ function formatDate(value) {
 
 function riskBadge(level) {
   const span = element("span", `badge ${level || "neutral"}`);
-  span.textContent = { low: "低风险", medium: "中风险", high: "高风险" }[level] || "未评估";
+  span.textContent = { CHAT: "CHAT", CONSULT: "CONSULT", RISK: "RISK" }[level] || "未评估";
   return span;
 }
 
@@ -250,7 +251,7 @@ function renderPagination(containerId, key, result, render) {
 async function loadOverview() {
   const [summaryResponse, reportsResponse, casesResponse] = await Promise.all([
     api("/api/v1/admin/dashboard/summary"),
-    api("/api/v1/admin/reports?risk_level=high"),
+    api("/api/v1/admin/reports?risk_level=RISK"),
     api("/api/v1/admin/cases"),
   ]);
   const [summary, highRiskReports, cases] = await Promise.all([
@@ -314,7 +315,6 @@ function renderReports() {
     summary.append(element("strong", "", report.emotion_summary));
     summary.appendChild(element("p", "", truncate(report.reason_summary, 110)));
     row.appendChild(summary);
-    row.appendChild(element("td", "", dialogueTypeLabel(report.dialogue_type)));
     const risk = document.createElement("td");
     risk.appendChild(riskBadge(report.risk_level));
     row.appendChild(risk);
@@ -327,12 +327,8 @@ function renderReports() {
     row.appendChild(action);
     body.appendChild(row);
   });
-  if (!result.items.length) body.appendChild(empty("暂无符合条件的报告", 6));
+  if (!result.items.length) body.appendChild(empty("暂无符合条件的报告", 5));
   renderPagination("#reportPagination", "reports", result, renderReports);
-}
-
-function dialogueTypeLabel(value) {
-  return { general: "一般问答", consult: "心理咨询", risk: "风险对话", psychological_support: "心理支持" }[value] || value || "—";
 }
 
 async function requestReportContext(report) {
@@ -348,11 +344,11 @@ async function requestReportContext(report) {
     const content = document.createDocumentFragment();
     content.appendChild(detailNotice(context.notice));
     content.appendChild(detailSection("学生原始表达", context.student_expression || "无可用内容"));
+    content.appendChild(detailSection("工作人员交接摘要", context.handoff_summary || "暂无交接摘要"));
     content.appendChild(detailSection("情绪摘要", report.emotion_summary));
     content.appendChild(detailSection("判断依据", report.reason_summary));
     const facts = element("dl", "detail-facts");
-    appendFact(facts, "风险等级", { low: "低风险", medium: "中风险", high: "高风险" }[report.risk_level]);
-    appendFact(facts, "对话类型", dialogueTypeLabel(report.dialogue_type));
+    appendFact(facts, "风险等级", report.risk_level);
     appendFact(facts, "生成时间", formatDate(report.created_at));
     content.appendChild(facts);
     openDrawer("报告详情", content, "必要上下文");
@@ -454,7 +450,7 @@ async function viewCaseHistory(item) {
     content.appendChild(detailSection("交接摘要", item.handoff_summary));
     const facts = element("dl", "detail-facts");
     appendFact(facts, "当前状态", caseStatusBadgeText(item.status));
-    appendFact(facts, "风险等级", { low: "低风险", medium: "中风险", high: "高风险" }[item.risk_level]);
+    appendFact(facts, "风险等级", item.risk_level);
     appendFact(facts, "创建时间", formatDate(item.created_at));
     content.appendChild(facts);
     if (item.note) content.appendChild(detailSection("最近备注", item.note));
@@ -523,11 +519,12 @@ function renderAlerts() {
 
 async function loadOperationTab() {
   if (state.operationTab === "jobs") await loadJobs();
-  else await loadAgentRuns();
+  else if (state.operationTab === "runs") await loadAgentRuns();
+  else await loadSkills();
 }
 
 async function switchOperationTab(tab) {
-  state.operationTab = tab === "runs" ? "runs" : "jobs";
+  state.operationTab = ["jobs", "runs", "skills"].includes(tab) ? tab : "jobs";
   document.querySelectorAll("[data-operation-tab]").forEach((button) => {
     const active = button.dataset.operationTab === state.operationTab;
     button.classList.toggle("active", active);
@@ -535,6 +532,7 @@ async function switchOperationTab(tab) {
   });
   document.querySelector("#jobsPanel").classList.toggle("hidden", state.operationTab !== "jobs");
   document.querySelector("#runsPanel").classList.toggle("hidden", state.operationTab !== "runs");
+  document.querySelector("#skillsPanel").classList.toggle("hidden", state.operationTab !== "skills");
   await loadCurrentPage();
 }
 
@@ -584,6 +582,28 @@ function jobTypeLabel(type) {
   return { ledger_write: "写入风险台账", case_create: "创建风险个案", alert_send: "发送风险预警" }[type] || type;
 }
 
+async function loadSkills() {
+  const response = await api("/api/v1/admin/skills");
+  state.skills = await response.json();
+  const body = document.querySelector("#skillRows");
+  body.replaceChildren();
+  state.skills.forEach((skill) => {
+    const row = document.createElement("tr");
+    row.appendChild(element("td", "cell-strong", skill.name));
+    const status = document.createElement("td");
+    status.appendChild(statusBadge(skill.status, {
+      READY: "READY",
+      WARN: "WARN",
+      FAILED: "FAILED",
+    }));
+    row.appendChild(status);
+    row.appendChild(element("td", "", skill.description || "—"));
+    row.appendChild(element("td", skill.issues.length ? "error-text" : "muted-text", skill.issues.join("；") || "校验通过"));
+    body.appendChild(row);
+  });
+  if (!state.skills.length) body.appendChild(empty("未发现 Skill 资产", 4));
+}
+
 async function loadAgentRuns() {
   const response = await api("/api/v1/admin/agent-runs");
   state.runs = await response.json();
@@ -597,10 +617,7 @@ function renderAgentRuns() {
   body.replaceChildren();
   result.items.forEach((run) => {
     const row = document.createElement("tr");
-    row.appendChild(element("td", "cell-strong", dialogueTypeLabel(run.route)));
-    const risk = document.createElement("td");
-    risk.appendChild(riskBadge(run.final_risk_level));
-    row.appendChild(risk);
+    row.appendChild(element("td", "cell-strong", run.risk_level));
     row.appendChild(element("td", "", `${run.provider} · ${run.model_calls} 次`));
     const status = document.createElement("td");
     status.appendChild(statusBadge(run.degraded ? "degraded" : run.status, {
@@ -619,7 +636,7 @@ function renderAgentRuns() {
     row.appendChild(action);
     body.appendChild(row);
   });
-  if (!result.items.length) body.appendChild(empty("暂无 Agent 运行记录", 6));
+  if (!result.items.length) body.appendChild(empty("暂无 Agent 运行记录", 5));
   renderPagination("#runPagination", "runs", result, renderAgentRuns);
 }
 
@@ -632,15 +649,42 @@ async function viewAgentRun(run) {
     const [steps, trace] = await Promise.all([stepsResponse.json(), traceResponse.json()]);
     const content = document.createDocumentFragment();
     const facts = element("dl", "detail-facts");
-    appendFact(facts, "运行路由", dialogueTypeLabel(run.route));
+    appendFact(facts, "风险等级", run.risk_level);
     appendFact(facts, "模型服务", run.provider);
     appendFact(facts, "模型调用", `${run.model_calls} 次`);
     appendFact(facts, "总耗时", `${run.total_latency_ms} ms`);
     appendFact(facts, "协作事件", `${trace.collaboration_events.length} 条`);
     appendFact(facts, "任务数量", `${trace.tasks.length} 个`);
     content.appendChild(facts);
+    if (trace.trace_notice) content.appendChild(detailNotice(trace.trace_notice));
     content.appendChild(detailSection("脱敏输入", trace.redacted_input || "—"));
     content.appendChild(detailSection("记忆摘要 memoryBrief", trace.memoryBrief || "本轮没有历史摘要"));
+
+    const riskSection = element("section", "detail-section");
+    riskSection.appendChild(element("h3", "", "风险判断链"));
+    riskSection.appendChild(detailNotice("UnderstandingAgent 展示的是初步判断；运行采用的是固定规则与 SafetyAgent 合并后的最终等级。"));
+    const riskList = element("ol", "step-list");
+    (trace.risk_decisions || []).forEach((decision) => {
+      const item = document.createElement("li");
+      const head = element("div", "step-head");
+      head.appendChild(element("strong", "", decision.role || decision.stage));
+      head.appendChild(riskBadge(decision.risk_level));
+      item.appendChild(head);
+      const metadata = [];
+      if (decision.confidence !== null && decision.confidence !== undefined) {
+        metadata.push(`置信度 ${Number(decision.confidence).toFixed(2)}`);
+      }
+      if (decision.degraded) metadata.push("降级判断");
+      if (decision.hard_rule_hit === true) metadata.push("命中硬规则");
+      if (decision.immediate_danger === true) metadata.push("存在即时危险信号");
+      if (metadata.length) item.appendChild(element("p", "muted-text", metadata.join(" · ")));
+      if (decision.reason) item.appendChild(element("p", "step-summary", decision.reason));
+      if (decision.topics?.length) item.appendChild(element("p", "muted-text", `识别主题：${decision.topics.join("、")}`));
+      riskList.appendChild(item);
+    });
+    if (!trace.risk_decisions?.length) riskList.appendChild(element("li", "", "该历史运行没有保存阶段风险判断。"));
+    riskSection.appendChild(riskList);
+    content.appendChild(riskSection);
 
     const stepSection = element("section", "detail-section");
     stepSection.appendChild(element("h3", "", "Agent Steps"));

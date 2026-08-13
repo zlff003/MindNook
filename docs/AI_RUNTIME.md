@@ -1,7 +1,7 @@
 # MindNook CollaborationBlackboard Agent Runtime
 
-> 版本：3.0  
-> 更新日期：2026-08-01  
+> 文档版本：3.1  
+> 更新日期：2026-08-08  
 > 黑板实现：`app/agents/blackboard.py`  
 > Agent 与 Coordinator：`app/agents/runtime.py`  
 > 外层业务编排：`app/harness/agent_harness.py`
@@ -230,10 +230,14 @@ final_risk = max(rule_floor, model_risk)
 
 - capability：`context`
 - 优先从 Redis 聚合当前会话最近 40 条脱敏消息，未命中时由 MySQL `chat_messages` 回填。
-- 将较早历史压缩为 `memoryBrief`，同时保留最近 8 条带角色脱敏原文 `modelHistory`。
-- 只读取 ContextAgent 自己的隔离私有记忆，不读取其他 Agent 的私有 key。
+- 将较早历史按固定 4 条学生关注、3 条助手支持和本轮输入压缩为最多 500 字的 `memoryBrief`，同时保留最近 8 条带角色脱敏原文 `modelHistory`。
+- 历史超过 8 条时将 `memoryBrief` 作为独立 system 消息，并按原角色拼接 `modelHistory`；短历史不重复注入摘要。
+- ContextAgent 的私有 key 与其他 Agent 隔离；当前确定性检索流程只记录检索策略，不把其他 Agent 的私有状态引入检索。
 - 在 psychological support / safety risk 或中高风险时加载本地审核知识和适用 Skill。
 - 发布知识、Skill 和不可覆盖的回复约束。
+- 启动时由 `SkillRegistry` 扫描 `skills/*/SKILL.md`，检查 frontmatter、name/description、目录名一致性与 `## Workflow`。
+- CHAT 不加载心理 Skill；CONSULT 加载基础支持与转介 Skill，并按焦虑、睡眠、学业主题叠加；RISK 加载高风险安全计划与转介 Skill。
+- 只有 `READY`、`WARN` Skill 会注入 Workflow；`FAILED` 不加载，并由固定安全回复兜底关键场景。
 - 当前知识实现是已审核内置检索；后续 RAG 可以替换检索器而不改变黑板协议。
 
 普通问答仍产生最小 Context artifact，以便 ResponseAgent 使用近期历史，但不加载心理知识和危机 Skill。

@@ -106,11 +106,11 @@ class PsychologicalReport(Base):
         ForeignKey("chat_messages.id"), unique=True, index=True
     )
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    dialogue_type: Mapped[str] = mapped_column(String(32))
     emotion_summary: Mapped[str] = mapped_column(Text)
     risk_level: Mapped[str] = mapped_column(String(16), index=True)
     confidence: Mapped[float] = mapped_column(Float)
     reason_summary: Mapped[str] = mapped_column(Text)
+    handoff_summary: Mapped[str] = mapped_column(Text, default="")
     generated_by_ai: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -127,10 +127,7 @@ class AgentRun(Base):
         ForeignKey("chat_messages.id"), unique=True, index=True
     )
     status: Mapped[str] = mapped_column(String(24), index=True)
-    route: Mapped[str] = mapped_column(String(32), index=True)
-    final_risk_level: Mapped[str | None] = mapped_column(
-        String(16), nullable=True, index=True
-    )
+    risk_level: Mapped[str] = mapped_column(String(16), index=True)
     provider: Mapped[str] = mapped_column(String(64))
     model_calls: Mapped[int] = mapped_column(Integer, default=0)
     degraded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

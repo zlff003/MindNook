@@ -77,12 +77,11 @@ class AgentHarness:
 
     @staticmethod
     def _tool_plan(result: AgentResult) -> list[str]:
-        if result.assessment.dialogue_type == "general":
+        if result.assessment.risk_level == "CHAT":
             return []
         tools = ["ledger_write"]
-        if result.assessment.risk_level in {"medium", "high"}:
+        if result.assessment.risk_level == "RISK":
             tools.append("case_create")
-        if result.assessment.risk_level == "high":
             tools.append("alert_send")
         return tools
 
@@ -99,8 +98,7 @@ class AgentHarness:
             conversation_id=conversation.id,
             source_message_id=user_message.id,
             status=trace.status,
-            route=trace.route,
-            final_risk_level=trace.final_risk_level,
+            risk_level=trace.risk_level,
             provider=trace.provider,
             model_calls=trace.model_calls,
             degraded=trace.degraded,
@@ -239,11 +237,15 @@ class AgentHarness:
                 },
             )
 
-            memory_context = self.memory_service.load(db, conversation)
+            redacted = redact_pii(command.content.strip())
+            memory_context = self.memory_service.load(
+                db,
+                conversation,
+                current_input=redacted,
+            )
             private_memory = self.agent_private_memory.load_for_agents(
                 conversation.public_id
             )
-            redacted = redact_pii(command.content.strip())
             user_message = Message(
                 conversation_id=conversation.id,
                 sender_type="student",
@@ -366,19 +368,27 @@ class AgentHarness:
             tool_plan = self._tool_plan(result)
 
             report: PsychologicalReport | None = None
-            if result.assessment.dialogue_type != "general":
+            if result.assessment.risk_level != "CHAT":
                 report = PsychologicalReport(
                     conversation_id=conversation.id,
                     source_message_id=user_message.id,
                     student_id=student.id,
-                    dialogue_type=result.assessment.dialogue_type,
                     emotion_summary=result.assessment.emotion_summary,
-                    risk_level=result.assessment.risk_level or "low",
+                    risk_level=result.assessment.risk_level,
                     confidence=result.assessment.confidence,
                     reason_summary=result.assessment.reason_summary,
                 )
                 db.add(report)
                 db.flush()
+                report.handoff_summary = self.runtime.skill_registry.render_handoff_summary(
+                    report_id=report.public_id,
+                    student_identity=f"{student.username}（{student.public_id}）",
+                    risk_level=report.risk_level,
+                    emotion_summary=report.emotion_summary,
+                    confidence=report.confidence,
+                    reason_summary=report.reason_summary,
+                    student_expression=command.content.strip(),
+                )
                 enqueue_report_jobs(
                     db,
                     report,
@@ -410,8 +420,7 @@ class AgentHarness:
                 "trace",
                 {
                     "run_id": result.trace.run_id,
-                    "route": result.trace.route,
-                    "risk_level": result.trace.final_risk_level,
+                    "risk_level": result.trace.risk_level,
                     "degraded": result.trace.degraded,
                     "tool_plan": tool_plan,
                     "report_id": report.public_id if report else None,

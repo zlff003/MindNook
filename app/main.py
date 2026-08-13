@@ -15,13 +15,16 @@ from app.core.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db import Base, build_engine, build_session_factory
 from app.models import User
+from app.risk_levels import migrate_legacy_risk_levels
 from app.harness.agent_harness import AgentHarness
 from app.memory.private import AgentPrivateMemory
 from app.memory.service import ShortTermMemoryService
 from app.memory.store import build_redis_store
 from app.memory.trace import AgentTraceService
+from app.rag.service import get_rag_service
 from app.services.chat import ChatService
 from app.services.model import build_model_provider
+from app.services.reporting import backfill_handoff_summaries
 from app.services.tool_dispatcher import InlineToolDispatcher, ThreadedToolDispatcher
 from app.tools.operations import ToolOperations
 
@@ -68,7 +71,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = build_engine(app_settings.database_url)
     session_factory = build_session_factory(engine)
     model_provider = build_model_provider(app_settings)
-    agent_runtime = CoordinatorAgent(model_provider, app_settings)
+    rag_service = get_rag_service(app_settings)
+    agent_runtime = CoordinatorAgent(
+        model_provider,
+        app_settings,
+        rag_service=rag_service,
+    )
     redis_store = build_redis_store(app_settings)
     memory_service = ShortTermMemoryService(app_settings, redis_store)
     agent_private_memory = AgentPrivateMemory(app_settings, redis_store)
@@ -91,8 +99,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        migrate_legacy_risk_levels(engine)
         Base.metadata.create_all(engine)
         _seed_demo_users(session_factory, app_settings)
+        backfill_handoff_summaries(session_factory, agent_runtime.skill_registry)
         tool_dispatcher.start()
         yield
         close_provider = getattr(model_provider, "close", None)
@@ -114,6 +124,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.session_factory = session_factory
     application.state.model_provider = model_provider
     application.state.agent_runtime = agent_runtime
+    application.state.rag_service = rag_service
+    application.state.skill_registry = agent_runtime.skill_registry
     application.state.coordinator_agent = agent_runtime
     application.state.agent_harness = agent_harness
     application.state.chat_service = chat_service

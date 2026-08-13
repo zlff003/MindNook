@@ -7,12 +7,11 @@ import uuid
 from pydantic import BaseModel, Field
 
 
-DialogueType = Literal["general", "psychological_support", "safety_risk"]
-RiskLevel = Literal["low", "medium", "high"]
+RiskLevel = Literal["CHAT", "CONSULT", "RISK"]
 
 
 class IntentAnalysis(BaseModel):
-    dialogue_type: DialogueType
+    risk_level: RiskLevel
     topics: list[str] = Field(default_factory=list, max_length=8)
     needs_knowledge: bool = False
     confidence: float = Field(ge=0, le=1)
@@ -39,6 +38,7 @@ class ContextBundle:
     recent_summary: str
     knowledge: list[str]
     skills: list[str] = field(default_factory=list)
+    skill_context: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
     memory_brief: str = ""
     model_history: list[dict[str, str]] = field(default_factory=list)
@@ -115,8 +115,7 @@ class AgentTurnResult:
 class RuntimeTrace:
     run_id: str
     status: str = "running"
-    route: str = "unknown"
-    final_risk_level: str | None = None
+    risk_level: str = "CHAT"
     provider: str = "unknown"
     model_calls: int = 0
     degraded: bool = False

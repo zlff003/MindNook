@@ -2,6 +2,8 @@
 
 MindNook 是一个校园心理健康问答系统的最小可运行闭环，包含学生端和管理端。
 
+项目文档的职责边界、推荐阅读顺序和维护约定见 [文档索引](docs/INDEX.md)。
+
 ## 本地运行
 
 MySQL 和 Redis 使用 Docker 启动，Python 后端直接在本机运行：
@@ -71,18 +73,21 @@ pytest
 运行完整 Agent 链路工程验证：
 
 ```bash
-python -m app.harness.runner --scenario support --require-model
+python -m app.harness.runner
 ```
 
-Harness 的职责边界、完整执行流程、Mock/真实模型差异、RAG 覆盖范围和验收方法见 `docs/AGENT_HARNESS.md`。
+该命令以临时 SQLite、内存短期记忆和 Mock 模型执行六类工程验证；使用
+`--json` 输出机器可读报告，使用 `--suite <name>` 选择单个套件。
 
-异步工具 Worker 的任务 DAG、幂等、重试、限流、死信以及 FastMCP stdio 用法见 `docs/MCP_AND_TOOL_QUEUE.md`。
+Harness 的职责边界与聊天编排见 [AgentHarness 工程链路说明](docs/AGENT_HARNESS.md)，一键验证套件见 [Engineering Harness](docs/ENGINEERING_HARNESS.md)。分层记忆、上下文压缩、Prompt 组装和审计记忆设计见 [上下文与分层记忆模块](docs/MEMORY.md)。
+
+异步工具 Worker 的任务 DAG、幂等、重试、限流、死信以及 FastMCP stdio 用法见 [MCP 与异步工具队列](docs/MCP_AND_TOOL_QUEUE.md)。
 
 启动 MCP Server，或让示例客户端按风险执行报告工具链：
 
 ```bash
 python -m app.mcp.server
-python -m app.mcp.client <report_public_id> --risk high
+python -m app.mcp.client <report_public_id> --risk RISK
 ```
 
 ## 模型切换
@@ -134,7 +139,15 @@ CoordinatorAgent 创建 root task
 
 知识文件位于 `data/knowledge/*.md`，Chroma 持久化数据默认位于 `data/chroma/`。Embedding、BM25 和重排均在本地执行，不需要运行时下载额外模型。RAG 不可用时会降级到少量内置知识，不能阻断基础对话和安全回复。
 
-完整的索引生命周期、检索公式、ContextAgent 接入、评测和维护方式见 `docs/RAG.md`。
+完整的索引生命周期、检索公式、ContextAgent 接入、评测和维护方式见 [RAG 模块](docs/RAG.md)。
+
+## 心理场景 Skills
+
+心理回复规则位于 `skills/*/SKILL.md`。每个 Skill 必须包含仅有 `name`、`description` 的 YAML frontmatter，以及 `## Workflow`。项目约定 Skill 名和目录名使用小写下划线并保持一致。
+
+Runtime 启动时扫描并校验 Skill；ContextAgent 根据风险等级和主题加载 Workflow，ResponseAgent 生成候选回复，SafetyAgent 按同一 Workflow 审查和修复。管理员可在“系统运行 → Skills”查看 `READY`、`WARN`、`FAILED` 状态。Skill 只提供场景表达规则，不负责任务调度、RAG 检索或数据库访问。
+
+七个内置 Skill、三级风险路由、校验状态、安全降级、交接摘要和维护测试方式见 [心理场景 Skill 系统](docs/SKILLS.md)。
 
 ## RAG 评测
 
@@ -169,7 +182,7 @@ python -m app.rag.evaluation --evaluate-answers
 - PII 脱敏后进入智能体运行层。
 - Redis 会话短期记忆：`mindbridge:short-term-memory:<session_id>`，最多 40 条、TTL 1 天。
 - Redis 未命中时从 `chat_messages` 最近 40 条回填。
-- 长历史压缩为 `memoryBrief`，Prompt 保留最近 8 条带角色脱敏原文 `modelHistory`。
+- 长历史按“最近 4 条学生关注、3 条助手支持和本轮输入”确定性压缩为最多 500 字的 `memoryBrief`；Prompt 保留最近 8 条带角色脱敏原文 `modelHistory`。
 - Understanding、Safety、Context、Response 使用互相隔离的 Agent 私有 Redis 记忆。
 - ContextAgent 默认使用 Chroma 向量召回、BM25、归一化融合、本地重排和首块前后文扩展。
 - `agent_run_traces` 保存输入、脱敏输入、记忆、检索、评估和黑板协作审计记录。

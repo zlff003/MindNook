@@ -117,7 +117,6 @@ class AgentPrivateMemory:
             session_public_id,
             {
                 "kind": "response_strategy",
-                "route": result.assessment.dialogue_type,
                 "risk_level": result.assessment.risk_level,
                 "adoption_source": adoption.payload.get("source") if adoption else None,
             },

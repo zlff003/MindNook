@@ -64,7 +64,7 @@ class TestToolQueueAndMcp:
         self.engine.dispose()
         self.temp_dir.cleanup()
 
-    def _report(self, risk_level="high") -> PsychologicalReport:
+    def _report(self, risk_level="RISK") -> PsychologicalReport:
         db = self.session_factory()
         try:
             user = User(
@@ -90,7 +90,6 @@ class TestToolQueueAndMcp:
                 conversation_id=conversation.id,
                 source_message_id=source.id,
                 student_id=user.id,
-                dialogue_type="safety_risk",
                 emotion_summary="distressed",
                 risk_level=risk_level,
                 confidence=0.95,
@@ -227,7 +226,7 @@ class TestToolQueueAndMcp:
         assert limiter.acquire_or_delay() > 59
 
     def test_threaded_dispatch_is_non_blocking(self):
-        report = self._report("low")
+        report = self._report("CONSULT")
         db = self.session_factory()
         try:
             enqueue_report_jobs(db, report, ["ledger_write"])
@@ -276,7 +275,7 @@ class TestToolQueueAndMcp:
         child_env["DATABASE_URL"] = self.database_url
         child_env["EXCEL_LEDGER_PATH"] = str(self.excel_path)
         outputs = asyncio.run(
-            run_report_tools(report.public_id, "high", env=child_env)
+            run_report_tools(report.public_id, "RISK", env=child_env)
         )
         assert [item["tool"] for item in outputs] == [
             "mindbridge_excel_report",

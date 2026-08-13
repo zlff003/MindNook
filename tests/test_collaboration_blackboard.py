@@ -147,7 +147,7 @@ class CollaborationBlackboardTests(unittest.TestCase):
             if event.type == "SAFETY_OVERRIDE"
         ]
         self.assertTrue(overrides)
-        self.assertEqual(result.assessment.risk_level, "high")
+        self.assertEqual(result.assessment.risk_level, "RISK")
         self.assertIn("不要独处", result.response)
 
     def test_repair_appends_new_proposals_and_reviews_without_overwrite(self):

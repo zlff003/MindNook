@@ -13,27 +13,6 @@ from app.models import Conversation, Message
 from app.services.privacy import redact_pii
 
 
-IMPORTANT_MARKERS = (
-    "自杀",
-    "伤害",
-    "不想活",
-    "撑不住",
-    "绝望",
-    "持续",
-    "每天",
-    "今晚",
-    "昨天",
-    "明天",
-    "小时",
-    "分钟",
-    "第一次",
-    "又",
-    "求助",
-    "联系",
-    "陪",
-)
-
-
 def _clip_preserving_edges(text: str, limit: int) -> tuple[str, bool]:
     normalized = re.sub(r"\s+", " ", text).strip()
     if len(normalized) <= limit:
@@ -51,35 +30,53 @@ class ContextCompressor:
         self.brief_limit = settings.memory_brief_max_chars
         self.history_char_limit = settings.memory_model_history_max_chars
 
-    def _memory_brief(self, older: list[MemoryMessage]) -> str:
-        if not older or self.brief_limit <= 0:
+    def _memory_brief(
+        self,
+        history: list[MemoryMessage],
+        current_input: str,
+    ) -> str:
+        if self.brief_limit <= 0:
             return ""
-        priority_indexes = {
-            index
-            for index, message in enumerate(older)
-            if message.role == "student"
-            and any(marker in message.content for marker in IMPORTANT_MARKERS)
-        }
-        priority_indexes.update(range(max(0, len(older) - 6), len(older)))
-        selected = [older[index] for index in sorted(priority_indexes)]
-        if not selected:
-            selected = older[-4:]
 
-        prefix = "较早对话摘要（脱敏、摘录式）："
-        parts: list[str] = []
-        used = len(prefix)
-        for message in selected:
-            role = "学生" if message.role == "student" else "助手"
-            snippet, _ = _clip_preserving_edges(message.content, 160)
-            part = f"{role}：{snippet}"
-            remaining = self.brief_limit - used
-            if remaining <= 1:
-                break
-            if len(part) > remaining:
-                part, _ = _clip_preserving_edges(part, remaining)
-            parts.append(part)
-            used += len(part) + 1
-        return (prefix + "；".join(parts))[: self.brief_limit]
+        student_messages = [item for item in history if item.role == "student"][-4:]
+        assistant_messages = [item for item in history if item.role == "assistant"][-3:]
+
+        def snippets(
+            messages: list[MemoryMessage],
+            per_message_limit: int,
+            section_limit: int,
+        ) -> str:
+            if not messages or section_limit <= 0:
+                return "无"
+            separators = max(0, len(messages) - 1)
+            fair_limit = max(1, (section_limit - separators) // len(messages))
+            item_limit = min(per_message_limit, fair_limit)
+            return "；".join(
+                _clip_preserving_edges(message.content, item_limit)[0]
+                for message in messages
+            )
+
+        current_focus = _clip_preserving_edges(redact_pii(current_input), 80)[0] or "无"
+        header = "历史记忆摘要（脱敏、确定性摘录）："
+        student_label = "学生近期关注："
+        assistant_label = "系统已经提供的支持："
+        current_label = "本轮输入关注："
+        fixed_length = sum(
+            len(item)
+            for item in (header, student_label, assistant_label, current_label, current_focus)
+        ) + 3
+        remaining = max(0, self.brief_limit - fixed_length)
+        student_budget = int(remaining * 0.6)
+        assistant_budget = remaining - student_budget
+        brief = "\n".join(
+            (
+                header,
+                f"{student_label}{snippets(student_messages, 80, student_budget)}",
+                f"{assistant_label}{snippets(assistant_messages, 70, assistant_budget)}",
+                f"{current_label}{current_focus}",
+            )
+        )
+        return brief[: self.brief_limit]
 
     def _model_history(self, recent: list[MemoryMessage]) -> tuple[MemoryMessage, ...]:
         if not recent or self.history_char_limit <= 0:
@@ -106,17 +103,23 @@ class ContextCompressor:
         *,
         source: str,
         cache_hit: bool,
+        current_input: str = "",
     ) -> MemoryContext:
-        recent = messages[-self.recent_limit :]
-        older = messages[: -self.recent_limit] if len(messages) > self.recent_limit else []
+        sanitized = [
+            replace(message, content=redact_pii(message.content)) for message in messages
+        ]
+        recent = sanitized[-self.recent_limit :]
+        history_compressed = len(sanitized) > self.recent_limit
+        older = sanitized[: -self.recent_limit] if history_compressed else sanitized
         return MemoryContext(
             session_public_id=session_public_id,
-            memory_brief=self._memory_brief(older),
+            memory_brief=self._memory_brief(older, current_input),
             model_history=self._model_history(recent),
             source=source,
             cache_hit=cache_hit,
-            total_messages=len(messages),
-            cached_messages=len(messages),
+            total_messages=len(sanitized),
+            cached_messages=len(sanitized),
+            history_compressed=history_compressed,
         )
 
 
@@ -147,7 +150,7 @@ class ShortTermMemoryService:
         return MemoryMessage(
             message_id=str(data["message_id"]),
             role=str(data["role"]),
-            content=str(data["content"]),
+            content=redact_pii(str(data["content"])),
             created_at=str(data.get("created_at") or ""),
         )
 
@@ -189,7 +192,13 @@ class ShortTermMemoryService:
         except (RedisError, OSError):
             return
 
-    def load(self, db, conversation: Conversation) -> MemoryContext:
+    def load(
+        self,
+        db,
+        conversation: Conversation,
+        *,
+        current_input: str = "",
+    ) -> MemoryContext:
         key = self.key(conversation.public_id)
         cached = self._read_cache(key)
         if cached:
@@ -198,6 +207,7 @@ class ShortTermMemoryService:
                 cached[-self.settings.short_term_memory_max_messages :],
                 source="redis",
                 cache_hit=True,
+                current_input=current_input,
             )
 
         records = list(
@@ -218,6 +228,7 @@ class ShortTermMemoryService:
             messages,
             source="mysql",
             cache_hit=False,
+            current_input=current_input,
         )
 
     def append(self, session_public_id: str, message: Message) -> None:

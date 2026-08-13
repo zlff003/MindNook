@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     short_term_memory_max_messages: int = 40
     short_term_memory_ttl_seconds: int = 86400
     memory_recent_messages: int = 8
-    memory_brief_max_chars: int = 1200
+    memory_brief_max_chars: int = 500
     memory_model_history_max_chars: int = 6000
     agent_private_memory_max_entries: int = 20
     agent_private_memory_ttl_seconds: int = 86400
@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     rag_top_k: int = 3
     rag_vector_weight: float = 0.45
     rag_bm25_weight: float = 0.55
+    skills_dir: str = "skills"
 
     model_provider: str = "mock"
     model_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"

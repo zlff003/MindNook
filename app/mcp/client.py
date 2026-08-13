@@ -35,19 +35,20 @@ async def run_report_tools(
     env: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Start the stdio server and invoke the report tool chain in dependency order."""
-    normalized_risk = risk_level.strip().lower()
-    if normalized_risk not in {"low", "medium", "high"}:
-        raise ValueError("risk_level must be low, medium, or high")
+    normalized_risk = risk_level.strip().upper()
+    if normalized_risk not in {"CHAT", "CONSULT", "RISK"}:
+        raise ValueError("risk_level must be CHAT, CONSULT, or RISK")
     server = StdioServerParameters(
         command=sys.executable,
         args=["-m", "app.mcp.server"],
         cwd=PROJECT_ROOT,
         env=env or dict(os.environ),
     )
-    calls = [("mindbridge_excel_report", {"report_id": report_id})]
-    if normalized_risk in {"medium", "high"}:
+    calls = []
+    if normalized_risk in {"CONSULT", "RISK"}:
+        calls.append(("mindbridge_excel_report", {"report_id": report_id}))
+    if normalized_risk == "RISK":
         calls.append(("mindbridge_case_create", {"report_id": report_id}))
-    if normalized_risk == "high":
         calls.append(("mindbridge_alert_send", {"report_id": report_id}))
 
     outputs: list[dict[str, Any]] = []
@@ -65,7 +66,7 @@ async def run_report_tools(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run MindBridge report tools over MCP stdio")
     parser.add_argument("report_id")
-    parser.add_argument("--risk", choices=("low", "medium", "high"), required=True)
+    parser.add_argument("--risk", choices=("CHAT", "CONSULT", "RISK"), required=True)
     args = parser.parse_args()
     output = asyncio.run(run_report_tools(args.report_id, args.risk))
     print(json.dumps(output, ensure_ascii=False, indent=2))

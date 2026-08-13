@@ -163,8 +163,8 @@ class AgentHarnessTests(unittest.TestCase):
         plan = self.runtime.plan("最近考试压力很大，晚上睡不着", [])
         step_names = [step.step_name for step in plan.board.trace.steps]
 
-        self.assertEqual(plan.intent.dialogue_type, "psychological_support")
-        self.assertEqual(plan.risk.risk_level, "low")
+        self.assertEqual(plan.intent.risk_level, "CONSULT")
+        self.assertEqual(plan.risk.risk_level, "CONSULT")
         self.assertIsInstance(plan.knowledge, list)
         self.assertEqual(len(plan.response_messages), 2)
         self.assertIn("response_prompt", step_names)

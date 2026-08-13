@@ -25,7 +25,7 @@ def memory_settings(**overrides) -> Settings:
         "short_term_memory_max_messages": 40,
         "short_term_memory_ttl_seconds": 86400,
         "memory_recent_messages": 8,
-        "memory_brief_max_chars": 1200,
+        "memory_brief_max_chars": 500,
         "memory_model_history_max_chars": 6000,
         "agent_private_memory_max_entries": 20,
         "agent_private_memory_ttl_seconds": 86400,
@@ -54,11 +54,13 @@ class UnavailableRedis:
 class PurposeRecordingProvider(MockModelProvider):
     def __init__(self):
         self.by_purpose: dict[str, list[str]] = {}
+        self.calls_by_purpose: dict[str, list[tuple]] = {}
 
     def complete(self, messages, *, model, temperature, json_mode, purpose):
         self.by_purpose.setdefault(purpose, []).extend(
             message.content for message in messages
         )
+        self.calls_by_purpose.setdefault(purpose, []).append(tuple(messages))
         return super().complete(
             messages,
             model=model,
@@ -129,8 +131,8 @@ class LayeredMemoryTests(unittest.TestCase):
         db = self.session_factory()
         try:
             conversation = db.get(Conversation, self.conversation_id)
-            first = service.load(db, conversation)
-            second = service.load(db, conversation)
+            first = service.load(db, conversation, current_input="这轮想讨论复习计划")
+            second = service.load(db, conversation, current_input="这轮想讨论复习计划")
             database_count = db.scalar(select(func.count()).select_from(Message))
         finally:
             db.close()
@@ -147,7 +149,11 @@ class LayeredMemoryTests(unittest.TestCase):
         self.assertGreater(store.ttl(key), 86000)
         self.assertEqual(len(first.model_history), 8)
         self.assertEqual(first.model_history[-1].content, "第 44 条历史消息")
-        self.assertIn("今晚我又有点撑不住", first.memory_brief)
+        self.assertTrue(first.history_compressed)
+        self.assertIn("学生近期关注", first.memory_brief)
+        self.assertIn("第 36 条历史消息", first.memory_brief)
+        self.assertNotIn("第 28 条历史消息", first.memory_brief)
+        self.assertIn("本轮输入关注：这轮想讨论复习计划", first.memory_brief)
 
     def test_model_history_keeps_latest_eight_with_role_and_char_budget(self):
         settings = memory_settings(memory_model_history_max_chars=280)
@@ -166,6 +172,7 @@ class LayeredMemoryTests(unittest.TestCase):
             messages,
             source="redis",
             cache_hit=True,
+            current_input="本轮问题",
         )
 
         self.assertLessEqual(len(context.model_history), 8)
@@ -176,6 +183,108 @@ class LayeredMemoryTests(unittest.TestCase):
             280,
         )
         self.assertLessEqual(len(context.memory_brief), settings.memory_brief_max_chars)
+
+    def test_memory_brief_is_deterministic_redacted_and_limited_to_500_chars(self):
+        settings = memory_settings()
+        compressor = ContextCompressor(settings)
+        messages = [
+            MemoryMessage(
+                message_id=str(index),
+                role="student" if index % 2 == 0 else "assistant",
+                content=(
+                    f"历史消息 {index}，联系电话 13800138000，" + "内容" * 60
+                ),
+                created_at="",
+            )
+            for index in range(18)
+        ]
+
+        first = compressor.compress(
+            self.session_public_id,
+            messages,
+            source="redis",
+            cache_hit=True,
+            current_input="本轮请联系 13900139000 讨论作业",
+        )
+        second = compressor.compress(
+            self.session_public_id,
+            messages,
+            source="redis",
+            cache_hit=True,
+            current_input="本轮请联系 13900139000 讨论作业",
+        )
+
+        self.assertEqual(first.memory_brief, second.memory_brief)
+        self.assertLessEqual(len(first.memory_brief), 500)
+        self.assertNotIn("13800138000", first.memory_brief)
+        self.assertNotIn("13900139000", first.memory_brief)
+        self.assertIn("[PHONE]", first.memory_brief)
+        self.assertIn("学生近期关注", first.memory_brief)
+        self.assertIn("系统已经提供的支持", first.memory_brief)
+        self.assertIn("本轮输入关注", first.memory_brief)
+
+    def test_short_history_keeps_roles_without_injecting_summary_system_message(self):
+        provider = PurposeRecordingProvider()
+        settings = memory_settings()
+        compressor = ContextCompressor(settings)
+        messages = (
+            MemoryMessage("1", "student", "第一条学生原话", ""),
+            MemoryMessage("2", "assistant", "第一条助手回复", ""),
+            MemoryMessage("3", "student", "第二条学生原话", ""),
+        )
+        context = compressor.compress(
+            self.session_public_id,
+            list(messages),
+            source="redis",
+            cache_hit=True,
+            current_input="当前输入",
+        )
+
+        runtime = CoordinatorAgent(provider, settings)
+        runtime.plan("当前输入", memory_context=context)
+        prompt = provider.calls_by_purpose["understanding"][0]
+
+        self.assertFalse(context.history_compressed)
+        self.assertEqual(context.model_history, messages)
+        self.assertEqual([item.role for item in prompt], ["system", "user", "assistant", "user", "user"])
+        self.assertNotIn("较早历史的内部记忆摘要", "\n".join(item.content for item in prompt))
+
+    def test_long_history_injects_summary_system_message_then_latest_eight(self):
+        provider = PurposeRecordingProvider()
+        settings = memory_settings()
+        compressor = ContextCompressor(settings)
+        messages = [
+            MemoryMessage(
+                str(index),
+                "student" if index % 2 == 0 else "assistant",
+                f"历史 {index}",
+                "",
+            )
+            for index in range(12)
+        ]
+        context = compressor.compress(
+            self.session_public_id,
+            messages,
+            source="redis",
+            cache_hit=True,
+            current_input="当前输入",
+        )
+
+        runtime = CoordinatorAgent(provider, settings)
+        plan = runtime.plan("当前输入", memory_context=context)
+        prompt = provider.calls_by_purpose["understanding"][0]
+
+        self.assertTrue(context.history_compressed)
+        self.assertEqual(len(context.model_history), 8)
+        self.assertEqual([item.content for item in context.model_history], [f"历史 {index}" for index in range(4, 12)])
+        self.assertEqual(prompt[1].role, "system")
+        self.assertIn("较早历史的内部记忆摘要", prompt[1].content)
+        self.assertEqual([item.content for item in prompt[2:-1]], [f"历史 {index}" for index in range(4, 12)])
+        self.assertEqual(prompt[-1].content, "当前输入")
+        self.assertEqual(
+            [item.content for item in plan.response_messages[2:-1]],
+            [f"历史 {index}" for index in range(4, 12)],
+        )
 
     def test_append_refreshes_ttl_and_trims_to_40(self):
         settings = memory_settings()
@@ -246,6 +355,7 @@ class LayeredMemoryTests(unittest.TestCase):
             cache_hit=True,
             total_messages=10,
             cached_messages=10,
+            history_compressed=True,
         )
         private_memory = {
             "UnderstandingAgent": ("UNDERSTANDING_PRIVATE_MARKER",),

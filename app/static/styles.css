@@ -577,17 +577,17 @@ th {
   font-weight: 750;
 }
 
-.badge.low {
+.badge.CHAT {
   color: var(--green-dark);
   background: var(--green-soft);
 }
 
-.badge.medium {
+.badge.CONSULT {
   color: #825319;
   background: #f7ead3;
 }
 
-.badge.high {
+.badge.RISK {
   color: var(--danger);
   background: var(--danger-soft);
 }

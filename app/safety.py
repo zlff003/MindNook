@@ -92,8 +92,7 @@ FORBIDDEN_OUTPUT_MARKERS = (
 
 @dataclass(frozen=True)
 class Assessment:
-    dialogue_type: str
-    risk_level: str | None
+    risk_level: str
     confidence: float
     emotion_summary: str
     reason_summary: str
@@ -118,8 +117,7 @@ def assess_message(text: str) -> Assessment:
     # 明确危险证据独立判断，消息其他位置的否认不能遮蔽自伤或伤人表达。
     if _has_clear_danger(normalized):
         return Assessment(
-            dialogue_type="safety_risk",
-            risk_level="high",
+            risk_level="RISK",
             confidence=0.99,
             emotion_summary="学生表达了与当前人身安全相关的严重痛苦。",
             reason_summary="固定安全规则识别到明确的伤害意图或即时危险表达。",
@@ -130,8 +128,7 @@ def assess_message(text: str) -> Assessment:
     if support_hits:
         medium = any(keyword in normalized for keyword in MEDIUM_RISK_KEYWORDS)
         return Assessment(
-            dialogue_type="psychological_support",
-            risk_level="medium" if medium else "low",
+            risk_level="CONSULT",
             confidence=0.86 if medium else 0.78,
             emotion_summary=f"学生表达了与{support_hits[0]}相关的困扰。",
             reason_summary=(
@@ -147,8 +144,7 @@ def assess_message(text: str) -> Assessment:
     if risk_topic_hits:
         clear_denial = _is_clear_denial(normalized)
         return Assessment(
-            dialogue_type="psychological_support",
-            risk_level="low",
+            risk_level="CONSULT",
             confidence=0.72 if clear_denial else 0.62,
             emotion_summary="学生提到了与人身安全相关的内容，需要谨慎理解。",
             reason_summary=(
@@ -159,8 +155,7 @@ def assess_message(text: str) -> Assessment:
         )
 
     return Assessment(
-        dialogue_type="general",
-        risk_level=None,
+        risk_level="CHAT",
         confidence=0.9,
         emotion_summary="",
         reason_summary="内容属于普通学习、校园生活或日常问答。",

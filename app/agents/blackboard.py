@@ -353,9 +353,8 @@ class CollaborationBlackboard:
             self.trace.degraded = True
             raise
 
-    def finish(self, route: str, risk_level: str | None, status: str = "succeeded") -> None:
-        self.trace.route = route
-        self.trace.final_risk_level = risk_level
+    def finish(self, risk_level: str, status: str = "succeeded") -> None:
+        self.trace.risk_level = risk_level
         self.trace.status = status
         self.trace.total_latency_ms = max(
             1,

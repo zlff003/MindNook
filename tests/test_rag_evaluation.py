@@ -69,9 +69,7 @@ class RAGEvaluationTests(unittest.TestCase):
         self.assertEqual(metrics["mrr"], 0.0)
 
     def test_high_risk_topics_are_added_deterministically(self):
-        topics = build_retrieval_topics(
-            ["情绪低落"], dialogue_type="safety_risk", risk_level="high"
-        )
+        topics = build_retrieval_topics(["情绪低落"], risk_level="RISK")
         self.assertIn("情绪低落", topics)
         self.assertIn("安全风险", topics)
         self.assertIn("现实求助", topics)

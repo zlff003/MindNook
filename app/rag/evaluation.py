@@ -261,7 +261,6 @@ def evaluate_retrieval(
             case.query,
             topics=build_retrieval_topics(
                 [],
-                dialogue_type=assessment.dialogue_type,
                 risk_level=assessment.risk_level,
             ),
             limit=k,
@@ -379,7 +378,7 @@ def evaluate_routing(cases: list[EvaluationCase]) -> dict:
     false_positive_cases: list[dict[str, str]] = []
     false_negative_cases: list[dict[str, str]] = []
     for case in cases:
-        actual = assess_message(case.query).dialogue_type != "general"
+        actual = assess_message(case.query).risk_level != "CHAT"
         if case.expect_rag and actual:
             true_positive += 1
         elif case.expect_rag and not actual:
@@ -426,7 +425,6 @@ def evaluate_answers(
                 case.query,
                 topics=build_retrieval_topics(
                     [],
-                    dialogue_type=assessment.dialogue_type,
                     risk_level=assessment.risk_level,
                 ),
             )

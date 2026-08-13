@@ -7,35 +7,29 @@ from app.services.privacy import redact_pii
 class SafetyRulesTests(unittest.TestCase):
     def test_general_question_is_not_psychologized(self):
         result = assess_message("请帮我解释一下 Python 列表推导式")
-        self.assertEqual(result.dialogue_type, "general")
-        self.assertIsNone(result.risk_level)
+        self.assertEqual(result.risk_level, "CHAT")
 
     def test_psychological_support_is_detected(self):
         result = assess_message("最近考试压力很大，晚上睡不着")
-        self.assertEqual(result.dialogue_type, "psychological_support")
-        self.assertEqual(result.risk_level, "low")
+        self.assertEqual(result.risk_level, "CONSULT")
 
-    def test_persistent_impact_is_medium_risk(self):
+    def test_persistent_impact_is_consult(self):
         result = assess_message("我每天都很焦虑，已经无法学习")
-        self.assertEqual(result.dialogue_type, "psychological_support")
-        self.assertEqual(result.risk_level, "medium")
+        self.assertEqual(result.risk_level, "CONSULT")
 
     def test_explicit_danger_is_high_risk_hard_rule(self):
         result = assess_message("我想自杀，现在完全撑不住")
-        self.assertEqual(result.dialogue_type, "safety_risk")
-        self.assertEqual(result.risk_level, "high")
+        self.assertEqual(result.risk_level, "RISK")
         self.assertTrue(result.hard_rule_hit)
 
     def test_explicit_suicidal_ideation_is_high_risk_hard_rule(self):
         result = assess_message("我现在有自杀的想法，需要有人陪着我")
-        self.assertEqual(result.dialogue_type, "safety_risk")
-        self.assertEqual(result.risk_level, "high")
+        self.assertEqual(result.risk_level, "RISK")
         self.assertTrue(result.hard_rule_hit)
 
     def test_clear_negation_does_not_trigger_high_rule(self):
         result = assess_message("我不会自杀，只是最近考试压力很大")
-        self.assertEqual(result.dialogue_type, "psychological_support")
-        self.assertNotEqual(result.risk_level, "high")
+        self.assertEqual(result.risk_level, "CONSULT")
 
     def test_clear_denials_are_not_high_risk(self):
         samples = (
@@ -46,8 +40,7 @@ class SafetyRulesTests(unittest.TestCase):
         for message in samples:
             with self.subTest(message=message):
                 result = assess_message(message)
-                self.assertEqual(result.dialogue_type, "psychological_support")
-                self.assertEqual(result.risk_level, "low")
+                self.assertEqual(result.risk_level, "CONSULT")
                 self.assertFalse(result.hard_rule_hit)
                 self.assertIn("明确否认", result.reason_summary)
 
@@ -60,8 +53,7 @@ class SafetyRulesTests(unittest.TestCase):
         for message in samples:
             with self.subTest(message=message):
                 result = assess_message(message)
-                self.assertEqual(result.dialogue_type, "safety_risk")
-                self.assertEqual(result.risk_level, "high")
+                self.assertEqual(result.risk_level, "RISK")
                 self.assertTrue(result.hard_rule_hit)
 
     def test_other_clear_danger_wording_hits_the_hard_rule(self):
@@ -74,8 +66,7 @@ class SafetyRulesTests(unittest.TestCase):
         for message in samples:
             with self.subTest(message=message):
                 result = assess_message(message)
-                self.assertEqual(result.dialogue_type, "safety_risk")
-                self.assertEqual(result.risk_level, "high")
+                self.assertEqual(result.risk_level, "RISK")
                 self.assertTrue(result.hard_rule_hit)
 
     def test_ambiguous_risk_topic_never_falls_through_to_general(self):
@@ -87,8 +78,7 @@ class SafetyRulesTests(unittest.TestCase):
         for message in samples:
             with self.subTest(message=message):
                 result = assess_message(message)
-                self.assertEqual(result.dialogue_type, "psychological_support")
-                self.assertEqual(result.risk_level, "low")
+                self.assertEqual(result.risk_level, "CONSULT")
                 self.assertFalse(result.hard_rule_hit)
 
     def test_high_risk_fallback_contains_no_backend_labels(self):

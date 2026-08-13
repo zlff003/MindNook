@@ -32,7 +32,7 @@ class DowngradingProvider(MockModelProvider):
             return ModelResponse(
                 content=json.dumps(
                     {
-                        "risk_level": "low",
+                        "risk_level": "CONSULT",
                         "confidence": 0.6,
                         "emotion_summary": "模型给出较低判断。",
                         "reason": "模型没有识别到即时危险。",
@@ -88,7 +88,7 @@ class AgentRuntimeTests(unittest.TestCase):
         runtime = AgentRuntime(MockModelProvider(), runtime_settings())
         result = runtime.run("最近考试压力很大，晚上睡不着", [])
 
-        self.assertEqual(result.assessment.dialogue_type, "psychological_support")
+        self.assertEqual(result.assessment.risk_level, "CONSULT")
         self.assertTrue(result.safety_checked)
         self.assertFalse(result.trace.degraded)
         self.assertEqual(result.trace.model_calls, 4)
@@ -110,8 +110,7 @@ class AgentRuntimeTests(unittest.TestCase):
         runtime = AgentRuntime(DowngradingProvider(), runtime_settings())
         result = runtime.run("我想自杀，现在完全撑不住了", [])
 
-        self.assertEqual(result.assessment.risk_level, "high")
-        self.assertEqual(result.assessment.dialogue_type, "safety_risk")
+        self.assertEqual(result.assessment.risk_level, "RISK")
         self.assertTrue(result.assessment.hard_rule_hit)
         self.assertIn("不要独处", result.response)
 
@@ -131,7 +130,7 @@ class AgentRuntimeTests(unittest.TestCase):
         result = runtime.run("我想自杀，现在完全撑不住了", [])
 
         self.assertTrue(result.trace.degraded)
-        self.assertEqual(result.assessment.risk_level, "high")
+        self.assertEqual(result.assessment.risk_level, "RISK")
         self.assertIn("不要独处", result.response)
         self.assertEqual(result.trace.status, "succeeded")
 

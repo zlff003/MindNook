@@ -124,8 +124,8 @@
                 <strong id="reportCount" class="metric-value">—</strong>
                 <span class="metric-action">查看全部报告</span>
               </button>
-              <button class="metric-card metric-link" type="button" data-nav="reports" data-risk="high">
-                <span class="metric-label">高风险事件</span>
+              <button class="metric-card metric-link" type="button" data-nav="reports" data-risk="RISK">
+                <span class="metric-label">RISK 事件</span>
                 <strong id="highRiskCount" class="metric-value danger-value">—</strong>
                 <span class="metric-action">优先查看</span>
               </button>
@@ -146,7 +146,7 @@
                 <div class="panel-header">
                   <div>
                     <p class="panel-kicker">优先处理</p>
-                    <h2>最近高风险报告</h2>
+                    <h2>最近 RISK 报告</h2>
                   </div>
                   <a class="text-link" href="#/reports">查看全部</a>
                 </div>
@@ -176,9 +176,8 @@
                   <span>风险等级</span>
                   <select id="riskFilter">
                     <option value="">全部等级</option>
-                    <option value="high">高风险</option>
-                    <option value="medium">中风险</option>
-                    <option value="low">低风险</option>
+                    <option value="CONSULT">CONSULT</option>
+                    <option value="RISK">RISK</option>
                   </select>
                 </label>
               </div>
@@ -188,7 +187,6 @@
                     <tr>
                       <th>学生</th>
                       <th>情绪与原因摘要</th>
-                      <th>对话类型</th>
                       <th>风险等级</th>
                       <th>生成时间</th>
                       <th>操作</th>
@@ -280,6 +278,9 @@
               <button id="runsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="runs">
                 Agent 运行
               </button>
+              <button id="skillsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="skills">
+                Skills
+              </button>
             </div>
 
             <section id="jobsPanel" class="panel page-panel operation-panel" role="tabpanel">
@@ -327,8 +328,7 @@
                 <table>
                   <thead>
                     <tr>
-                      <th>路由</th>
-                      <th>最终风险</th>
+                      <th>风险等级</th>
                       <th>模型调用</th>
                       <th>运行状态</th>
                       <th>总耗时</th>
@@ -339,6 +339,28 @@
                 </table>
               </div>
               <div id="runPagination" class="pagination"></div>
+            </section>
+
+            <section id="skillsPanel" class="panel page-panel operation-panel hidden" role="tabpanel">
+              <div class="panel-header">
+                <div>
+                  <p class="panel-kicker">可检查 · 可测试 · 可维护</p>
+                  <h2>Skill 资产状态</h2>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Skill</th>
+                      <th>状态</th>
+                      <th>用途</th>
+                      <th>校验信息</th>
+                    </tr>
+                  </thead>
+                  <tbody id="skillRows"></tbody>
+                </table>
+              </div>
             </section>
           </section>
         </div>

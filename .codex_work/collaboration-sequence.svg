@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1380" viewBox="0 0 1920 1380">
+  <defs>
+    <style>
+      .title { font: 700 36px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #17324d; }
+      .actor { font: 600 20px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #17324d; }
+      .label { font: 500 18px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #24394d; }
+      .small { font: 400 16px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #41576b; }
+      .lane { stroke: #9eb1c3; stroke-width: 2; stroke-dasharray: 8 8; }
+      .arrow { stroke: #2d6fa3; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .return { stroke: #58758d; stroke-width: 3; stroke-dasharray: 9 7; fill: none; marker-end: url(#arrowGray); }
+      .actorBox { fill: #eaf3fa; stroke: #76a4c7; stroke-width: 2; rx: 12; }
+      .safeBox { fill: #fff3e8; stroke: #d99048; stroke-width: 2; rx: 12; }
+      .boardBox { fill: #eef8f2; stroke: #67a77d; stroke-width: 2; rx: 12; }
+      .altBox { fill: #f7f9fb; stroke: #8da2b5; stroke-width: 2; rx: 10; }
+      .noteBox { fill: #fff9df; stroke: #d4b34e; stroke-width: 2; rx: 10; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#2d6fa3"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#58758d"/>
+    </marker>
+  </defs>
+
+  <rect width="1920" height="1380" fill="#ffffff"/>
+  <text x="960" y="58" text-anchor="middle" class="title">多智能体协作时序图</text>
+
+  <!-- actors -->
+  <rect x="40" y="90" width="210" height="62" class="actorBox"/>
+  <rect x="310" y="90" width="220" height="62" class="actorBox"/>
+  <rect x="590" y="90" width="230" height="62" class="boardBox"/>
+  <rect x="880" y="90" width="220" height="62" class="actorBox"/>
+  <rect x="1160" y="90" width="210" height="62" class="safeBox"/>
+  <rect x="1430" y="90" width="210" height="62" class="actorBox"/>
+  <rect x="1690" y="90" width="190" height="62" class="actorBox"/>
+
+  <text x="145" y="129" text-anchor="middle" class="actor">AgentHarness</text>
+  <text x="420" y="129" text-anchor="middle" class="actor">CoordinatorAgent</text>
+  <text x="705" y="116" text-anchor="middle" class="actor">Collaboration</text>
+  <text x="705" y="140" text-anchor="middle" class="actor">Blackboard</text>
+  <text x="990" y="129" text-anchor="middle" class="actor">UnderstandingAgent</text>
+  <text x="1265" y="129" text-anchor="middle" class="actor">SafetyAgent</text>
+  <text x="1535" y="129" text-anchor="middle" class="actor">ContextAgent</text>
+  <text x="1785" y="129" text-anchor="middle" class="actor">ResponseAgent</text>
+
+  <!-- lanes -->
+  <line x1="145" y1="152" x2="145" y2="1330" class="lane"/>
+  <line x1="420" y1="152" x2="420" y2="1330" class="lane"/>
+  <line x1="705" y1="152" x2="705" y2="1330" class="lane"/>
+  <line x1="990" y1="152" x2="990" y2="1330" class="lane"/>
+  <line x1="1265" y1="152" x2="1265" y2="1330" class="lane"/>
+  <line x1="1535" y1="152" x2="1535" y2="1330" class="lane"/>
+  <line x1="1785" y1="152" x2="1785" y2="1330" class="lane"/>
+
+  <!-- request and initialization -->
+  <line x1="145" y1="205" x2="408" y2="205" class="arrow"/>
+  <text x="276" y="194" text-anchor="middle" class="label">脱敏消息 + MemoryContext</text>
+
+  <line x1="420" y1="260" x2="693" y2="260" class="arrow"/>
+  <text x="556" y="249" text-anchor="middle" class="label">创建根任务，发布 hard_rule</text>
+  <rect x="310" y="280" width="790" height="55" class="noteBox"/>
+  <text x="705" y="314" text-anchor="middle" class="small">固定规则命中明确危险时立即发布 SAFETY_OVERRIDE，建立不可降低的高风险下限</text>
+
+  <!-- understanding -->
+  <line x1="420" y1="380" x2="693" y2="380" class="arrow"/>
+  <text x="556" y="369" text-anchor="middle" class="label">创建 understand_input</text>
+  <line x1="990" y1="425" x2="717" y2="425" class="arrow"/>
+  <text x="854" y="414" text-anchor="middle" class="label">claim(understanding)</text>
+  <line x1="990" y1="475" x2="717" y2="475" class="arrow"/>
+  <text x="854" y="464" text-anchor="middle" class="label">发布 intent + 关闭任务</text>
+
+  <!-- risk branch -->
+  <rect x="300" y="515" width="1080" height="175" class="altBox"/>
+  <text x="320" y="545" class="actor">路由分支</text>
+  <text x="330" y="582" class="label">普通交流：Coordinator 发布无需模型评估的 risk</text>
+  <line x1="420" y1="610" x2="693" y2="610" class="arrow"/>
+  <text x="556" y="599" text-anchor="middle" class="small">RISK_NOT_REQUIRED</text>
+  <text x="330" y="650" class="label">心理支持 / 安全风险：SafetyAgent 评估并合并固定风险下限</text>
+  <line x1="1265" y1="675" x2="717" y2="675" class="arrow"/>
+  <text x="991" y="664" text-anchor="middle" class="small">risk + SAFETY_OVERRIDE（高风险时）</text>
+
+  <!-- context -->
+  <line x1="420" y1="745" x2="693" y2="745" class="arrow"/>
+  <text x="556" y="734" text-anchor="middle" class="label">创建 collect_context</text>
+  <line x1="1535" y1="790" x2="717" y2="790" class="arrow"/>
+  <text x="1126" y="779" text-anchor="middle" class="label">claim(context)，装配记忆 / RAG / Skill</text>
+  <line x1="1535" y1="835" x2="717" y2="835" class="arrow"/>
+  <text x="1126" y="824" text-anchor="middle" class="label">发布 context + 回复硬约束</text>
+
+  <!-- response generation -->
+  <line x1="420" y1="890" x2="693" y2="890" class="arrow"/>
+  <text x="556" y="879" text-anchor="middle" class="label">创建 prepare_response</text>
+  <line x1="1785" y1="935" x2="717" y2="935" class="arrow"/>
+  <text x="1251" y="924" text-anchor="middle" class="label">response_prompt → response_proposal v1</text>
+  <line x1="1785" y1="980" x2="1265" y2="980" class="arrow"/>
+  <text x="1525" y="969" text-anchor="middle" class="label">通知审查并创建 review_response</text>
+
+  <!-- review and repair -->
+  <line x1="1265" y1="1025" x2="717" y2="1025" class="arrow"/>
+  <text x="991" y="1014" text-anchor="middle" class="label">发布 safety_review v1</text>
+  <rect x="300" y="1055" width="1510" height="175" class="altBox"/>
+  <text x="320" y="1085" class="actor">审查结果</text>
+  <text x="330" y="1122" class="label">通过：Coordinator 核对 proposal 版本并采纳</text>
+  <line x1="705" y1="1150" x2="432" y2="1150" class="return"/>
+  <text x="568" y="1139" text-anchor="middle" class="small">final_response + FINAL_ADOPTED</text>
+  <text x="330" y="1195" class="label">拒绝：创建 repair_response，ResponseAgent 生成 v2，SafetyAgent 再次审查</text>
+  <line x1="1265" y1="1215" x2="1773" y2="1215" class="arrow"/>
+  <text x="1519" y="1204" text-anchor="middle" class="small">revision_guidance → proposal v2 → review v2</text>
+
+  <!-- persist and public response -->
+  <line x1="420" y1="1270" x2="157" y2="1270" class="return"/>
+  <text x="288" y="1259" text-anchor="middle" class="label">最终安全结果</text>
+  <rect x="40" y="1300" width="1780" height="55" class="noteBox"/>
+  <text x="930" y="1334" text-anchor="middle" class="small">AgentHarness 成功落库后才公开 SSE；报告、台账、个案和预警在事务提交后异步执行</text>
+</svg>

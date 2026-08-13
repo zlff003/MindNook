@@ -90,11 +90,11 @@ class MockModelProvider:
         if purpose == "understanding":
             content = json.dumps(
                 {
-                    "dialogue_type": assessment.dialogue_type,
+                    "risk_level": assessment.risk_level,
                     "topics": ["general"]
-                    if assessment.dialogue_type == "general"
+                    if assessment.risk_level == "CHAT"
                     else ["emotional_support"],
-                    "needs_knowledge": assessment.dialogue_type != "general",
+                    "needs_knowledge": assessment.risk_level != "CHAT",
                     "confidence": assessment.confidence,
                     "reason": assessment.reason_summary,
                 },
@@ -103,21 +103,21 @@ class MockModelProvider:
         elif purpose == "risk_assessment":
             content = json.dumps(
                 {
-                    "risk_level": assessment.risk_level or "low",
+                    "risk_level": assessment.risk_level,
                     "confidence": assessment.confidence,
                     "emotion_summary": assessment.emotion_summary
                     or "未识别到明显情绪困扰。",
                     "reason": assessment.reason_summary,
-                    "immediate_danger": assessment.risk_level == "high",
-                    "needs_safety_question": assessment.risk_level == "high",
+                    "immediate_danger": assessment.risk_level == "RISK",
+                    "needs_safety_question": assessment.risk_level == "RISK",
                 },
                 ensure_ascii=False,
             )
         elif purpose == "response_generation":
             lowered = student_message.lower()
-            if assessment.dialogue_type == "safety_risk":
+            if assessment.risk_level == "RISK":
                 content = high_risk_fallback()
-            elif assessment.dialogue_type == "psychological_support":
+            elif assessment.risk_level == "CONSULT":
                 content = (
                     "听起来这段困扰让你承受了不少压力，愿意说出来已经很不容易。"
                     "现在可以先把最急的一件事缩小成十分钟能完成的一步，再联系一位信任的人，"

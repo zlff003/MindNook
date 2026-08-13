@@ -138,7 +138,7 @@ class MindNookApiTests(unittest.TestCase):
         self.assertEqual(self._count(RiskCase), 0)
         self.assertEqual(self._count(AlertDelivery), 0)
 
-    def test_low_risk_support_creates_report_and_ledger_only(self):
+    def test_consult_creates_report_and_ledger_only(self):
         conversation_id = self._create_conversation()
         response = self._chat(
             conversation_id,
@@ -152,7 +152,7 @@ class MindNookApiTests(unittest.TestCase):
         self.assertEqual(self._count(RiskCase), 0)
         self.assertEqual(self._count(AlertDelivery), 0)
 
-    def test_medium_risk_creates_case(self):
+    def test_persistent_impact_remains_consult_without_case(self):
         conversation_id = self._create_conversation()
         response = self._chat(
             conversation_id,
@@ -161,10 +161,11 @@ class MindNookApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self._count(PsychologicalReport), 1)
-        self.assertEqual(self._count(RiskCase), 1)
+        self.assertEqual(self._count(LedgerEntry), 1)
+        self.assertEqual(self._count(RiskCase), 0)
         self.assertEqual(self._count(AlertDelivery), 0)
 
-    def test_high_risk_creates_full_follow_up_chain(self):
+    def test_risk_creates_full_follow_up_chain(self):
         conversation_id = self._create_conversation()
         response = self._chat(
             conversation_id,
@@ -235,7 +236,7 @@ class MindNookApiTests(unittest.TestCase):
         )
         self.assertEqual(runs_response.status_code, 200)
         run = runs_response.json()[0]
-        self.assertEqual(run["route"], "psychological_support")
+        self.assertEqual(run["risk_level"], "CONSULT")
         self.assertEqual(run["provider"], "mock")
         self.assertFalse(run["degraded"])
 
@@ -264,12 +265,46 @@ class MindNookApiTests(unittest.TestCase):
         )
         self.assertEqual(trace_response.status_code, 200)
         audit_memory = trace_response.json()
+        self.assertTrue(audit_memory["trace_available"])
+        self.assertIsNone(audit_memory["trace_notice"])
         self.assertIn("memoryBrief", audit_memory)
         self.assertIn("modelHistory", audit_memory)
         self.assertTrue(audit_memory["agent_steps"])
         self.assertTrue(audit_memory["collaboration_events"])
         self.assertTrue(audit_memory["tasks"])
         self.assertTrue(audit_memory["artifacts"])
+        risk_decisions = audit_memory["risk_decisions"]
+        self.assertEqual(
+            [item["stage"] for item in risk_decisions],
+            ["understanding", "hard_rule", "safety", "run_final"],
+        )
+        understanding = risk_decisions[0]
+        self.assertEqual(understanding["producer"], "UnderstandingAgent")
+        self.assertEqual(understanding["risk_level"], "CONSULT")
+        self.assertIsNotNone(understanding["confidence"])
+        self.assertTrue(understanding["reason"])
+        self.assertEqual(risk_decisions[-1]["risk_level"], run["risk_level"])
+
+        session = self.client.app.state.session_factory()
+        try:
+            persisted_trace = session.scalar(
+                select(AgentRunTrace).where(AgentRunTrace.run_id == session.scalar(
+                    select(AgentRun.id).where(AgentRun.public_id == run["id"])
+                ))
+            )
+            session.delete(persisted_trace)
+            session.commit()
+        finally:
+            session.close()
+        legacy_response = self.client.get(
+            f"/api/v1/admin/agent-runs/{run['id']}/trace",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(legacy_response.status_code, 200)
+        legacy_trace = legacy_response.json()
+        self.assertFalse(legacy_trace["trace_available"])
+        self.assertIn("无法恢复 UnderstandingAgent", legacy_trace["trace_notice"])
+        self.assertEqual(legacy_trace["risk_decisions"], [])
 
     def test_raw_pii_never_enters_agent_model_messages(self):
         provider = RecordingModelProvider()
@@ -306,7 +341,7 @@ class MindNookApiTests(unittest.TestCase):
         conversation_id = self._create_conversation()
         self._chat(
             conversation_id,
-            "我每天都很焦虑，已经无法学习",
+            "我想自杀，现在完全撑不住了",
             "request-case-history-0001",
         )
         cases = self.client.get(

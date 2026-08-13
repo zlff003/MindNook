@@ -1,7 +1,7 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.models import (
     User,
 )
 from app.schemas import CaseNoteRequest, CaseTransitionRequest
+from app.skills.registry import SkillRegistry
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -33,6 +34,106 @@ ALLOWED_CASE_TRANSITIONS = {
     "following": {"closed"},
     "closed": {"following"},
 }
+
+
+def _risk_decisions_from_trace(trace: AgentRunTrace, run: AgentRun) -> list[dict]:
+    """Return the stage-by-stage risk decisions stored in the audit trace."""
+    artifacts = json.loads(trace.artifacts_json)
+    events = json.loads(trace.collaboration_events_json)
+    degraded_by_actor = {
+        event.get("actor"): bool(event.get("payload", {}).get("degraded"))
+        for event in events
+        if event.get("type") in {"INTENT_PUBLISHED", "RISK_PUBLISHED"}
+    }
+    stages = []
+    for kind, stage, role in (
+        ("intent", "understanding", "UnderstandingAgent 初步判断"),
+        ("hard_rule", "hard_rule", "固定安全规则下限"),
+        ("risk", "safety", "SafetyAgent 最终评估"),
+    ):
+        artifact = next(
+            (item for item in reversed(artifacts) if item.get("kind") == kind),
+            None,
+        )
+        if not artifact:
+            continue
+        payload = artifact.get("payload") or {}
+        producer = artifact.get("producer") or ""
+        stages.append(
+            {
+                "stage": stage,
+                "role": role,
+                "producer": producer,
+                "risk_level": payload.get("risk_level"),
+                "confidence": payload.get("confidence"),
+                "reason": payload.get("reason") or payload.get("reason_summary"),
+                "topics": payload.get("topics") or [],
+                "needs_knowledge": payload.get("needs_knowledge"),
+                "hard_rule_hit": payload.get("hard_rule_hit"),
+                "immediate_danger": payload.get("immediate_danger"),
+                "needs_safety_question": payload.get("needs_safety_question"),
+                "degraded": degraded_by_actor.get(producer, False),
+                "artifact_id": artifact.get("artifact_id"),
+                "version": artifact.get("version"),
+            }
+        )
+    stages.append(
+        {
+            "stage": "run_final",
+            "role": "运行最终采纳结果",
+            "producer": "CoordinatorAgent",
+            "risk_level": run.risk_level,
+            "confidence": None,
+            "reason": None,
+            "topics": [],
+            "needs_knowledge": None,
+            "hard_rule_hit": None,
+            "immediate_danger": None,
+            "needs_safety_question": None,
+            "degraded": run.degraded,
+            "artifact_id": None,
+            "version": None,
+        }
+    )
+    return stages
+
+
+@router.get("/skills")
+def list_skills(
+    request: Request,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    del admin, db
+    registry = SkillRegistry(request.app.state.skill_registry.skills_dir)
+    return [item.to_public_dict() for item in registry.scan()]
+
+
+@router.get("/knowledge/status")
+def knowledge_status(
+    request: Request,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    del admin
+    return request.app.state.rag_service.status()
+
+
+@router.get("/knowledge/sources")
+def knowledge_sources(
+    request: Request,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    del admin
+    return request.app.state.rag_service.status()["sources"]
+
+
+@router.post("/knowledge/index/rebuild")
+def rebuild_knowledge_index(
+    request: Request,
+    admin: Annotated[User, Depends(require_admin)],
+):
+    del admin
+    return request.app.state.rag_service.rebuild()
 
 
 def _audit(
@@ -68,7 +169,7 @@ def dashboard_summary(
         "high_risk": db.scalar(
             select(func.count())
             .select_from(PsychologicalReport)
-            .where(PsychologicalReport.risk_level == "high")
+            .where(PsychologicalReport.risk_level == "RISK")
         )
         or 0,
         "open_cases": db.scalar(
@@ -105,7 +206,6 @@ def list_reports(
         {
             "id": report.public_id,
             "student": user.username,
-            "dialogue_type": report.dialogue_type,
             "emotion_summary": report.emotion_summary,
             "risk_level": report.risk_level,
             "confidence": report.confidence,
@@ -134,6 +234,7 @@ def report_context(
     return {
         "report_id": report.public_id,
         "student_expression": source.content if source else "",
+        "handoff_summary": report.handoff_summary,
         "notice": "仅用于必要的人工跟进；本报告由智能系统生成，不构成临床诊断。",
     }
 
@@ -308,8 +409,7 @@ def list_agent_runs(
         {
             "id": item.public_id,
             "status": item.status,
-            "route": item.route,
-            "final_risk_level": item.final_risk_level,
+            "risk_level": item.risk_level,
             "provider": item.provider,
             "model_calls": item.model_calls,
             "degraded": item.degraded,
@@ -395,11 +495,32 @@ def get_agent_run_trace(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="运行记录不存在。")
     trace = db.scalar(select(AgentRunTrace).where(AgentRunTrace.run_id == run.id))
     if not trace:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="审计记忆不存在。")
+        _audit(db, admin, "agent_audit_memory_viewed", "agent_run", run.public_id)
+        db.commit()
+        return {
+            "run_id": run.public_id,
+            "trace_available": False,
+            "trace_notice": "该历史运行未保存阶段审计轨迹，无法恢复 UnderstandingAgent 当时的原始判断；当前仅保留运行最终风险等级。",
+            "source_input": None,
+            "redacted_input": None,
+            "memoryBrief": "",
+            "modelHistory": [],
+            "agent_steps": [],
+            "retrieval_results": [],
+            "assessment": {},
+            "risk_decisions": [],
+            "collaboration_events": [],
+            "tasks": [],
+            "artifacts": [],
+            "messages": [],
+            "created_at": run.created_at,
+        }
     _audit(db, admin, "agent_audit_memory_viewed", "agent_run", run.public_id)
     db.commit()
     return {
         "run_id": run.public_id,
+        "trace_available": True,
+        "trace_notice": None,
         "source_input": trace.source_input,
         "redacted_input": trace.redacted_input,
         "memoryBrief": trace.memory_brief,
@@ -407,6 +528,7 @@ def get_agent_run_trace(
         "agent_steps": json.loads(trace.agent_steps_json),
         "retrieval_results": json.loads(trace.retrieval_results_json),
         "assessment": json.loads(trace.assessment_json),
+        "risk_decisions": _risk_decisions_from_trace(trace, run),
         "collaboration_events": json.loads(trace.collaboration_events_json),
         "tasks": json.loads(trace.tasks_json),
         "artifacts": json.loads(trace.artifacts_json),

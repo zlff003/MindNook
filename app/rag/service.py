@@ -25,12 +25,11 @@ SAFETY_RETRIEVAL_TOPICS = ("安全风险", "危机支持", "当前安全", "现�
 def build_retrieval_topics(
     topics: list[str] | tuple[str, ...] | None,
     *,
-    dialogue_type: str,
-    risk_level: str | None,
+    risk_level: str,
 ) -> list[str]:
     """Combine model topics with deterministic safety topics used in production/eval."""
     combined = list(topics or [])
-    if dialogue_type == "safety_risk" or risk_level == "high":
+    if risk_level == "RISK":
         combined.extend(SAFETY_RETRIEVAL_TOPICS)
     return list(dict.fromkeys(topic for topic in combined if topic))
 
@@ -344,6 +343,31 @@ class HybridRAGService:
         limit: int | None = None,
     ) -> list[RetrievalHit]:
         return list(self.retrieve_stages(query, topics=topics, limit=limit).final)
+
+    def status(self) -> dict:
+        """Return an admin-safe snapshot of the currently indexed knowledge corpus."""
+        self._ensure_index()
+        with self._lock:
+            source_counts: dict[str, int] = {}
+            for chunk in self._chunks:
+                source_counts[chunk.source] = source_counts.get(chunk.source, 0) + 1
+            return {
+                "status": "ready",
+                "collection": self._collection.name if self._collection is not None else None,
+                "source_count": len(source_counts),
+                "chunk_count": len(self._chunks),
+                "sources": [
+                    {"name": source, "chunk_count": count}
+                    for source, count in sorted(source_counts.items())
+                ],
+            }
+
+    def rebuild(self) -> dict:
+        """Force a deterministic rescan/upsert and return the resulting status."""
+        with self._lock:
+            self._signature = None
+        self._ensure_index()
+        return self.status()
 
 
 @lru_cache(maxsize=8)

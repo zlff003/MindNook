@@ -38,10 +38,11 @@ from app.rag.service import (
 )
 from app.safety import Assessment, assess_message, high_risk_fallback, review_student_response
 from app.services.model import ModelCallError, ModelMessage, ModelProvider
+from app.skills.registry import SkillRegistry
 
 
 T = TypeVar("T", bound=BaseModel)
-RISK_ORDER = {None: 0, "low": 1, "medium": 2, "high": 3}
+RISK_ORDER = {"CHAT": 0, "CONSULT": 1, "RISK": 2}
 
 
 def _extract_json_object(text: str) -> dict:
@@ -73,56 +74,47 @@ def _parse_structured(text: str, schema: type[T]) -> T:
 
 def _fallback_intent(hard: Assessment) -> IntentAnalysis:
     return IntentAnalysis(
-        dialogue_type=hard.dialogue_type,
+        risk_level=hard.risk_level,
         topics=[],
-        needs_knowledge=hard.dialogue_type != "general",
+        needs_knowledge=hard.risk_level != "CHAT",
         confidence=hard.confidence,
         reason=hard.reason_summary,
     )
 
 
-def _merge_route(hard: Assessment, intent: IntentAnalysis) -> str:
-    if hard.hard_rule_hit or intent.dialogue_type == "safety_risk":
-        return "safety_risk"
-    if (
-        hard.dialogue_type == "psychological_support"
-        or intent.dialogue_type == "psychological_support"
-    ):
-        return "psychological_support"
-    return "general"
+def _merge_risk_level(hard: Assessment, intent: IntentAnalysis) -> str:
+    if hard.hard_rule_hit:
+        return "RISK"
+    return max(
+        (hard.risk_level, intent.risk_level),
+        key=lambda value: RISK_ORDER[value],
+    )
 
 
 def _merge_assessment(
     hard: Assessment,
     model_risk: RiskAssessment | None,
-    route: str,
+    classified_level: str,
 ) -> Assessment:
-    if route == "general":
+    if classified_level == "CHAT":
         return Assessment(
-            dialogue_type="general",
-            risk_level=None,
+            risk_level="CHAT",
             confidence=max(hard.confidence, 0.5),
             emotion_summary="",
             reason_summary="普通交流，不生成心理报告。",
             hard_rule_hit=hard.hard_rule_hit,
         )
 
-    hard_level = (
-        "high"
-        if route == "safety_risk"
-        else hard.risk_level if hard.dialogue_type != "general" else "low"
+    hard_level = "RISK" if hard.hard_rule_hit else hard.risk_level
+    model_level = model_risk.risk_level if model_risk else "CONSULT"
+    final_level = max(
+        (hard_level, classified_level, model_level),
+        key=lambda value: RISK_ORDER[value],
     )
-    model_level = model_risk.risk_level if model_risk else "low"
-    final_level = max((hard_level, model_level), key=lambda value: RISK_ORDER[value])
     return Assessment(
-        dialogue_type=(
-            "safety_risk"
-            if final_level == "high" or route == "safety_risk"
-            else "psychological_support"
-        ),
         risk_level=final_level,
         confidence=max(
-            hard.confidence if hard.risk_level else 0,
+            hard.confidence,
             model_risk.confidence if model_risk else 0.6,
         ),
         emotion_summary=(
@@ -136,10 +128,10 @@ def _merge_assessment(
     )
 
 
-def _safe_fallback(route: str) -> str:
-    if route == "safety_risk":
+def _safe_fallback(risk_level: str) -> str:
+    if risk_level == "RISK":
         return high_risk_fallback()
-    if route == "psychological_support":
+    if risk_level == "CONSULT":
         return (
             "听起来你现在正经历一些不容易的感受，谢谢你愿意说出来。"
             "此刻可以先做一件很小的事：慢一点呼吸，并联系一位你信任的人聊聊。"
@@ -172,10 +164,32 @@ class RuntimeInput:
 
     @property
     def prompt_context(self) -> str:
+        summary = (
+            self.memory_brief
+            if self.memory_context.history_compressed
+            else "短历史未压缩"
+        )
         return (
-            f"较早记忆摘要：{self.memory_brief or '无'}\n"
+            f"较早记忆摘要：{summary or '无'}\n"
             f"最近原文对话：\n{self.model_history_text or '无'}"
         )
+
+    @property
+    def history_prompt_messages(self) -> list[ModelMessage]:
+        messages: list[ModelMessage] = []
+        if self.memory_context.history_compressed and self.memory_brief:
+            messages.append(
+                ModelMessage(
+                    "system",
+                    "以下是较早历史的内部记忆摘要，仅作为背景参考：\n"
+                    f"{self.memory_brief}",
+                )
+            )
+        messages.extend(
+            ModelMessage(item.model_role, item.content)
+            for item in self.memory_context.model_history
+        )
+        return messages
 
     def private_for(self, agent_name: str) -> str:
         values = self.private_memory.get(agent_name, ())
@@ -218,14 +232,14 @@ class UnderstandingAgent(CollaborationAgent):
                 temperature=0.1,
                 json_mode=True,
                 messages=[
-                    ModelMessage("system", UNDERSTANDING_SYSTEM_PROMPT),
                     ModelMessage(
-                        "user",
-                        f"{runtime_input.prompt_context}\n"
+                        "system",
+                        f"{UNDERSTANDING_SYSTEM_PROMPT}\n"
                         f"UnderstandingAgent 私有记忆："
-                        f"{runtime_input.private_for(self.name)}\n"
-                        f"当前消息：{runtime_input.message}",
+                        f"{runtime_input.private_for(self.name)}",
                     ),
+                    *runtime_input.history_prompt_messages,
+                    ModelMessage("user", runtime_input.message),
                 ],
             )
             intent = _parse_structured(response.content, IntentAnalysis)
@@ -253,7 +267,7 @@ class UnderstandingAgent(CollaborationAgent):
                     "INTENT_PUBLISHED",
                     self.name,
                     payload={
-                        "dialogue_type": intent.dialogue_type,
+                        "risk_level": intent.risk_level,
                         "degraded": degraded,
                     },
                 ),
@@ -272,7 +286,7 @@ class SafetyAgent(CollaborationAgent):
     def _assess(self, blackboard, runtime_input) -> AgentTurnResult:
         hard: Assessment = blackboard.require_artifact("hard_rule").payload
         intent: IntentAnalysis = blackboard.require_artifact("intent").payload
-        route = _merge_route(hard, intent)
+        classified_level = _merge_risk_level(hard, intent)
         model_risk: RiskAssessment | None = None
         degraded = False
         try:
@@ -284,14 +298,14 @@ class SafetyAgent(CollaborationAgent):
                 temperature=0.0,
                 json_mode=True,
                 messages=[
-                    ModelMessage("system", RISK_SYSTEM_PROMPT),
                     ModelMessage(
-                        "user",
-                        f"{runtime_input.prompt_context}\n"
+                        "system",
+                        f"{RISK_SYSTEM_PROMPT}\n"
                         f"SafetyAgent 私有记忆："
-                        f"{runtime_input.private_for(self.name)}\n"
-                        f"当前消息：{runtime_input.message}",
+                        f"{runtime_input.private_for(self.name)}",
                     ),
+                    *runtime_input.history_prompt_messages,
+                    ModelMessage("user", runtime_input.message),
                 ],
             )
             model_risk = _parse_structured(response.content, RiskAssessment)
@@ -304,7 +318,7 @@ class SafetyAgent(CollaborationAgent):
                 agent=self.name,
             )
 
-        assessment = _merge_assessment(hard, model_risk, route)
+        assessment = _merge_assessment(hard, model_risk, classified_level)
         events = [
             AgentEvent(
                 "RISK_PUBLISHED",
@@ -312,13 +326,13 @@ class SafetyAgent(CollaborationAgent):
                 payload={"risk_level": assessment.risk_level, "degraded": degraded},
             )
         ]
-        if assessment.risk_level == "high":
+        if assessment.risk_level == "RISK":
             events.append(
                 AgentEvent(
                     "SAFETY_OVERRIDE",
                     self.name,
                     payload={
-                        "risk_level": "high",
+                        "risk_level": "RISK",
                         "reason": "高风险安全下限覆盖普通响应路径。",
                     },
                 )
@@ -338,6 +352,7 @@ class SafetyAgent(CollaborationAgent):
     def _review(self, blackboard, runtime_input) -> AgentTurnResult:
         proposal = blackboard.require_artifact("response_proposal")
         assessment: Assessment = blackboard.require_artifact("risk").payload
+        context: ContextBundle = blackboard.require_artifact("context").payload
         candidate = str(proposal.payload)
         degraded = False
         if proposal.metadata.get("trusted_fallback"):
@@ -390,7 +405,8 @@ class SafetyAgent(CollaborationAgent):
                 messages=[
                     ModelMessage(
                         "system",
-                        f"{REVIEW_SYSTEM_PROMPT}\n当前场景：{assessment.dialogue_type}\n"
+                        f"{REVIEW_SYSTEM_PROMPT}\n当前风险级别：{assessment.risk_level}\n"
+                        f"Skill Workflow：{' | '.join(context.skill_context) or '无'}\n"
                         f"SafetyAgent 私有记忆："
                         f"{runtime_input.private_for(self.name)}",
                     ),
@@ -408,7 +424,7 @@ class SafetyAgent(CollaborationAgent):
             blackboard.trace.degraded = True
             degraded = True
             approved = (
-                assessment.dialogue_type == "general"
+                assessment.risk_level == "CHAT"
                 and review_student_response(candidate)
             )
             review = ResponseReview(
@@ -462,16 +478,14 @@ class ContextAgent(CollaborationAgent):
     name = "ContextAgent"
     capabilities = {"context"}
 
-    def __init__(self, rag_service: HybridRAGService):
+    def __init__(self, rag_service: HybridRAGService, skill_registry: SkillRegistry):
         self.rag_service = rag_service
+        self.skill_registry = skill_registry
 
     def perform(self, task, blackboard, runtime_input) -> AgentTurnResult:
         intent: IntentAnalysis = blackboard.require_artifact("intent").payload
         assessment: Assessment = blackboard.require_artifact("risk").payload
-        enrich = (
-            assessment.dialogue_type in {"psychological_support", "safety_risk"}
-            or assessment.risk_level in {"medium", "high"}
-        )
+        enrich = assessment.risk_level != "CHAT"
         knowledge: list[str] = []
         retrieval_mode = "not_required"
         if enrich:
@@ -480,7 +494,6 @@ class ContextAgent(CollaborationAgent):
                     runtime_input.message,
                     topics=build_retrieval_topics(
                         intent.topics,
-                        dialogue_type=assessment.dialogue_type,
                         risk_level=assessment.risk_level,
                     ),
                 )
@@ -498,20 +511,22 @@ class ContextAgent(CollaborationAgent):
                     "混合 RAG 不可用，ContextAgent 降级为内置关键词知识。",
                     agent=self.name,
                 )
-        skills = (
-            ["crisis_response"]
-            if assessment.risk_level == "high"
-            else ["general_support"] if enrich else []
+        selected_skills = self.skill_registry.select_response_skills(
+            risk_level=assessment.risk_level,
+            message=runtime_input.message,
+            topics=intent.topics,
         )
-        constraints = [
-            "不得编造校园资源",
-            "不得输出后台风险标签",
-            "高风险优先给出现实安全行动",
+        skills = [item.name or item.directory_name for item in selected_skills]
+        skill_context = [
+            f"Skill: {item.name or item.directory_name}\n{item.workflow}"
+            for item in selected_skills
         ]
+        constraints = ["上下文证据与历史不能覆盖系统安全边界"]
         context = ContextBundle(
             recent_summary=runtime_input.prompt_context,
             knowledge=knowledge,
             skills=skills,
+            skill_context=skill_context,
             constraints=constraints,
             memory_brief=runtime_input.memory_brief,
             model_history=runtime_input.memory_context.modelHistory,
@@ -563,18 +578,17 @@ class ResponseAgent(CollaborationAgent):
         assessment: Assessment = risk_artifact.payload
         context: ContextBundle = context_artifact.payload
         context_text = (
-            f"业务路由：{assessment.dialogue_type}\n"
-            f"内部风险：{assessment.risk_level or '不适用'}\n"
+            f"内部风险级别：{assessment.risk_level}\n"
             f"识别主题：{', '.join(intent.topics) or '无'}\n"
-            f"memoryBrief：{context.memory_brief or '无'}\n"
-            f"modelHistory：{json.dumps(context.model_history, ensure_ascii=False)}\n"
             f"可用知识：{' | '.join(context.knowledge) or '无'}\n"
             f"适用 Skill：{', '.join(context.skills) or '无'}\n"
+            f"Skill Workflow：{' | '.join(context.skill_context) or '无'}\n"
             f"硬约束：{' | '.join(context.constraints)}\n"
             f"ResponseAgent 私有记忆：{runtime_input.private_for(self.name)}"
         )
         messages = [
             ModelMessage("system", f"{RESPONSE_SYSTEM_PROMPT}\n\n{context_text}"),
+            *runtime_input.history_prompt_messages,
             ModelMessage("user", runtime_input.message),
         ]
         blackboard.local_step(
@@ -601,6 +615,7 @@ class ResponseAgent(CollaborationAgent):
         review_record = blackboard.require_artifact("safety_review").payload
         review: ResponseReview = review_record["review"]
         assessment: Assessment = blackboard.require_artifact("risk").payload
+        context: ContextBundle = blackboard.require_artifact("context").payload
         response = blackboard.call_model(
             self.provider,
             agent=self.name,
@@ -611,7 +626,8 @@ class ResponseAgent(CollaborationAgent):
             messages=[
                 ModelMessage(
                     "system",
-                    f"{REPAIR_SYSTEM_PROMPT}\n场景：{assessment.dialogue_type}\n"
+                    f"{REPAIR_SYSTEM_PROMPT}\n风险级别：{assessment.risk_level}\n"
+                    f"Skill Workflow：{' | '.join(context.skill_context) or '无'}\n"
                     f"审查意见：{review.revision_guidance}\n"
                     f"ResponseAgent 私有记忆："
                     f"{runtime_input.private_for(self.name)}",
@@ -658,6 +674,46 @@ class ResponseAgent(CollaborationAgent):
             "response_prompt"
         ).payload
         assessment: Assessment = blackboard.require_artifact("risk").payload
+        context: ContextBundle = blackboard.require_artifact("context").payload
+        required_skill = {
+            "CONSULT": "supportive_response_baseline",
+            "RISK": "high_risk_safety_plan",
+        }.get(assessment.risk_level)
+        if required_skill and required_skill not in context.skills:
+            candidate = _safe_fallback(assessment.risk_level)
+            blackboard.trace.degraded = True
+            blackboard.local_step(
+                "skill_fallback",
+                f"关键 Skill {required_skill} 不可用，采用固定安全回退。",
+                agent=self.name,
+            )
+            yield candidate
+            proposal = AgentArtifact(
+                "response_proposal",
+                self.name,
+                candidate,
+                metadata={"trusted_fallback": True, "missing_skill": required_skill},
+            )
+            return AgentTurnResult(
+                artifacts=(proposal,),
+                messages=(
+                    AgentMessage(
+                        self.name,
+                        "SafetyAgent",
+                        "关键 Skill 不可用，提交固定安全模板进行确定性审查。",
+                        artifact_ids=(proposal.artifact_id,),
+                    ),
+                ),
+                tasks=(
+                    AgentTask(
+                        kind="review_response",
+                        capability="safety_review",
+                        created_by=self.name,
+                        input_artifact_ids=(proposal.artifact_id,),
+                    ),
+                ),
+                events=(AgentEvent("SKILL_FALLBACK_APPLIED", self.name),),
+            )
         parts: list[str] = []
         for delta in blackboard.stream_model(
             self.provider,
@@ -665,7 +721,7 @@ class ResponseAgent(CollaborationAgent):
             purpose="response_generation",
             messages=messages,
             model=self.settings.model_response_name or self.settings.model_name,
-            temperature=0.45 if assessment.dialogue_type == "general" else 0.25,
+            temperature=0.45 if assessment.risk_level == "CHAT" else 0.25,
         ):
             parts.append(delta)
             yield delta
@@ -759,12 +815,18 @@ class CoordinatorAgent:
         model_provider: ModelProvider,
         settings: Settings,
         rag_service: HybridRAGService | None = None,
+        skill_registry: SkillRegistry | None = None,
     ):
         self.provider = model_provider
         self.settings = settings
         self.understanding = UnderstandingAgent(model_provider, settings)
         self.safety = SafetyAgent(model_provider, settings)
-        self.context = ContextAgent(rag_service or get_rag_service(settings))
+        self.skill_registry = skill_registry or SkillRegistry(settings.skills_dir)
+        self.skill_registry.scan()
+        self.context = ContextAgent(
+            rag_service or get_rag_service(settings),
+            self.skill_registry,
+        )
         self.response = ResponseAgent(model_provider, settings)
         self.agents: tuple[CollaborationAgent, ...] = (
             self.understanding,
@@ -810,10 +872,10 @@ class CoordinatorAgent:
             return
 
         intent: IntentAnalysis = intent_artifact.payload
-        route = _merge_route(hard, intent)
+        classified_level = _merge_risk_level(hard, intent)
         if not blackboard.latest_artifact("risk"):
-            if route == "general":
-                assessment = _merge_assessment(hard, None, route)
+            if classified_level == "CHAT":
+                assessment = _merge_assessment(hard, None, classified_level)
                 self._coordinator_merge(
                     blackboard,
                     root_task,
@@ -823,7 +885,7 @@ class CoordinatorAgent:
                             AgentEvent(
                                 "RISK_NOT_REQUIRED",
                                 self.name,
-                                payload={"route": "general"},
+                                payload={"risk_level": "CHAT"},
                             ),
                         ),
                         close_task=False,
@@ -939,6 +1001,8 @@ class CoordinatorAgent:
                 cache_hit=False,
                 total_messages=len(legacy_messages),
                 cached_messages=len(legacy_messages),
+                history_compressed=len(legacy_messages)
+                > self.settings.memory_recent_messages,
             )
         runtime_input = RuntimeInput(
             message,
@@ -965,7 +1029,7 @@ class CoordinatorAgent:
                 AgentEvent(
                     "SAFETY_OVERRIDE",
                     self.name,
-                    payload={"risk_level": "high", "source": "hard_rule"},
+                    payload={"risk_level": "RISK", "source": "hard_rule"},
                 )
             )
         self._coordinator_merge(
@@ -998,8 +1062,7 @@ class CoordinatorAgent:
             )
 
         assessment: Assessment = blackboard.require_artifact("risk").payload
-        blackboard.trace.route = assessment.dialogue_type
-        blackboard.trace.final_risk_level = assessment.risk_level
+        blackboard.trace.risk_level = assessment.risk_level
         return RuntimePlan(blackboard, runtime_input, root_task)
 
     def _complete_missing_plan_with_fallbacks(
@@ -1022,13 +1085,17 @@ class CoordinatorAgent:
             )
         intent: IntentAnalysis = blackboard.require_artifact("intent").payload
         if not blackboard.latest_artifact("risk"):
-            route = _merge_route(hard, intent)
+            classified_level = _merge_risk_level(hard, intent)
             self._coordinator_merge(
                 blackboard,
                 root_task,
                 AgentTurnResult(
                     artifacts=(
-                        AgentArtifact("risk", self.name, _merge_assessment(hard, None, route)),
+                        AgentArtifact(
+                            "risk",
+                            self.name,
+                            _merge_assessment(hard, None, classified_level),
+                        ),
                     ),
                     close_task=False,
                 ),
@@ -1054,6 +1121,7 @@ class CoordinatorAgent:
             assessment: Assessment = blackboard.require_artifact("risk").payload
             fallback_messages = [
                 ModelMessage("system", RESPONSE_SYSTEM_PROMPT),
+                *runtime_input.history_prompt_messages,
                 ModelMessage("user", runtime_input.message),
             ]
             prompt_artifact = AgentArtifact(
@@ -1072,7 +1140,7 @@ class CoordinatorAgent:
                             capability="response_stream",
                             created_by=self.name,
                             input_artifact_ids=(prompt_artifact.artifact_id,),
-                            metadata={"route": assessment.dialogue_type},
+                            metadata={"risk_level": assessment.risk_level},
                         ),
                     ),
                     close_task=False,
@@ -1127,7 +1195,7 @@ class CoordinatorAgent:
             ),
         )
         assessment = plan.assessment
-        blackboard.finish(assessment.dialogue_type, assessment.risk_level)
+        blackboard.finish(assessment.risk_level)
         return AgentResult(
             assessment=assessment,
             response=response,
@@ -1170,7 +1238,7 @@ class CoordinatorAgent:
                             source="safety_approved_proposal",
                         )
                     if proposal_count >= 2:
-                        fallback = _safe_fallback(plan.assessment.dialogue_type)
+                        fallback = _safe_fallback(plan.assessment.risk_level)
                         blackboard.local_step(
                             "final_safety_fallback",
                             "SafetyAgent 复审拒绝，Coordinator 采用固定安全模板。",
@@ -1210,7 +1278,7 @@ class CoordinatorAgent:
                 if not self._execute_one_turn(blackboard, plan.runtime_input):
                     raise RuntimeError("collaboration stalled before final adoption")
         except (AgentBudgetExceeded, ModelCallError, ValidationError, ValueError):
-            fallback = _safe_fallback(plan.assessment.dialogue_type)
+            fallback = _safe_fallback(plan.assessment.risk_level)
             blackboard.local_step(
                 "final_safety_fallback",
                 "协作预算或安全步骤失败，Coordinator 采用固定安全模板。",
@@ -1234,7 +1302,7 @@ class CoordinatorAgent:
             ),
             None,
         )
-        fallback = _safe_fallback(plan.assessment.dialogue_type)
+        fallback = _safe_fallback(plan.assessment.risk_level)
         if task:
             fallback_artifact = AgentArtifact(
                 "response_proposal",
