@@ -55,6 +55,9 @@ class RetrievalHit:
             expanded_chunk_ids=chunk_ids,
         )
 
+    def with_rerank_score(self, score: float) -> RetrievalHit:
+        return replace(self, rerank_score=score)
+
     def to_prompt_text(self) -> str:
         expansion = "；已扩展前后文" if self.expanded else ""
         header = (

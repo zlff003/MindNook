@@ -130,10 +130,10 @@ CoordinatorAgent 创建 root task
 ```text
 中文 Markdown
   -> 默认按 512 字符切块、相邻块重叠 64 字符
-  -> 本地中文特征 Embedding 写入 Chroma 并执行向量召回
+  -> BAAI/bge-small-zh-v1.5 Embedding 写入 Chroma 并执行向量召回
   -> BM25 关键词召回
-  -> 向量分与 BM25 分分别归一化，默认按 0.45 / 0.55 融合
-  -> 使用 query 覆盖率、短语命中和词面相似度本地重排
+  -> 向量分与 BM25 分分别归一化，默认按 0.75 / 0.25 融合
+  -> 使用 BAAI/bge-reranker-base Cross-Encoder 本地重排
   -> 为第一名补充同文档前后块
 ```
 
@@ -184,7 +184,7 @@ python -m app.rag.evaluation --evaluate-answers
 - Redis 未命中时从 `chat_messages` 最近 40 条回填。
 - 长历史按“最近 4 条学生关注、3 条助手支持和本轮输入”确定性压缩为最多 500 字的 `memoryBrief`；Prompt 保留最近 8 条带角色脱敏原文 `modelHistory`。
 - Understanding、Safety、Context、Response 使用互相隔离的 Agent 私有 Redis 记忆。
-- ContextAgent 默认使用 Chroma 向量召回、BM25、归一化融合、本地重排和首块前后文扩展。
+- ContextAgent 默认使用 Chroma 向量召回、BM25、归一化融合、Cross-Encoder 重排和首块前后文扩展。
 - `agent_run_traces` 保存输入、脱敏输入、记忆、检索、评估和黑板协作审计记录。
 - 心理报告、工作台账、风险个案，以及可配置 SMTP 的邮件预警（未配置时使用日志渠道）。
 - 后台工具真实写入 `.xlsx` 派生台账，并采用报告 ID 去重和原子替换。

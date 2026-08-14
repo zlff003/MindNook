@@ -496,6 +496,7 @@ class ContextAgent(CollaborationAgent):
                         intent.topics,
                         risk_level=assessment.risk_level,
                     ),
+                    risk_level=assessment.risk_level,
                 )
                 knowledge = [hit.to_prompt_text() for hit in hits]
                 retrieval_mode = "chroma_bm25_hybrid"

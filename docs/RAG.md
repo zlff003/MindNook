@@ -7,7 +7,7 @@
 
 ## 1. 模块定位
 
-MindNook 的 RAG 模块为心理支持和安全风险对话补充本地知识证据。它读取中文 Markdown 知识文件，通过 Chroma 向量召回和 BM25 关键词召回获得候选内容，再经过归一化融合、本地重排和首块前后文扩展，把最终上下文交给 `ResponseAgent`。
+MindNook 的 RAG 模块为心理支持和安全风险对话补充本地知识证据。它读取中文 Markdown 知识文件，通过 Chroma 向量召回和 BM25 关键词召回获得候选内容，再经过归一化融合、中文 Cross-Encoder 重排和首块前后文扩展，把最终上下文交给 `ResponseAgent`。
 
 当前模块有三个明确边界：
 
@@ -20,7 +20,7 @@ MindNook 的 RAG 模块为心理支持和安全风险对话补充本地知识证
 ```mermaid
 flowchart LR
     A[中文 Markdown<br/>data/knowledge] --> B[切块<br/>512 / overlap 64]
-    B --> C[本地中文特征 Embedding]
+    B --> C[BAAI bge-small-zh-v1.5 Embedding]
     C --> D[(Chroma)]
     B --> E[BM25 内存索引]
 
@@ -51,7 +51,7 @@ flowchart LR
 
 | 路径 | 职责 |
 |---|---|
-| `app/rag/text.py` | 中文分词、短语提取、本地 Embedding、BM25、Markdown 切块 |
+| `app/rag/text.py` | 正式中文 Embedding、测试哈希向量、BM25、Markdown 切块 |
 | `app/rag/types.py` | `KnowledgeChunk`、`RetrievalHit`、`RetrievalStages` 数据结构 |
 | `app/rag/service.py` | Chroma 入库、双路召回、融合、重排、扩展和服务缓存 |
 | `app/rag/evaluation.py` | 离线评测、五阶段消融、验收阈值和报告生成 |
@@ -148,16 +148,14 @@ mindnook_knowledge_d384
 
 `get_rag_service()` 使用 LRU 缓存共享服务实例，缓存键包含环境、路径、切块参数、维度、候选数、Top K 和融合权重。
 
-## 7. 本地 Embedding
+## 7. 中文 Embedding
 
-当前 `LocalChineseEmbedding` 是离线中文特征向量，不是预训练神经网络 Embedding 模型。它不需要联网或下载模型，适合本地 MVP 和确定性回归。
+生产默认使用 FastEmbed 运行 `BAAI/bge-small-zh-v1.5`，这是 512 维中文检索
+Embedding 模型。首次启动会下载模型到 `data/models`，之后从本地缓存加载。
+Query 和文档分别使用模型的 query/passage 编码入口。
 
-默认维度为 384，向量由两类特征组成：
-
-1. 语义锚点：压力、焦虑、睡眠、低落、关系、适应、安全、求助八组人工主题词。
-2. 词面哈希：中文连续文本生成二元和三元片段，英文和数字按单词提取，再通过 BLAKE2b 映射到剩余维度。
-
-文档只有在同一语义组出现至少两个命中时才激活对应锚点；Query 命中一个主题词即可激活。文档中同主题命中越稳定，锚点越强，但设有上限。最终向量执行 L2 归一化。
+`LocalChineseEmbedding` 仅保留为 `RAG_EMBEDDING_PROVIDER=hash` 的确定性单元测试
+后端，不再是生产默认。
 
 Chroma 查询返回余弦距离，服务转换为：
 
@@ -196,12 +194,11 @@ retrieval_query = user_query + intent_topics
 安全风险、危机支持、当前安全、现实求助
 ```
 
-触发条件为：
+触发条件为最终 `risk_level == "RISK"`。
 
-- `dialogue_type == "safety_risk"`；或
-- `risk_level == "high"`。
-
-这部分由固定风险评估结果驱动，不依赖语言模型是否恰好输出了安全主题。它只增强检索，不改变 `SafetyAgent` 的风险结论。
+这部分由最终风险评估结果驱动，不依赖语言模型是否恰好输出安全主题。
+此外，RISK 检索固定将《安全风险与危机支持边界》占用一个 Top K 名额，
+避免安全知识完全受通用相关性排序影响。
 
 ## 10. 双路召回与融合
 
@@ -216,32 +213,24 @@ normalized(x) = (x - min) / (max - min)
 当所有分数相同时，正分统一归一化为 1，否则为 0。融合公式为：
 
 ```text
-fused_score = 0.45 × normalized_vector_score
-            + 0.55 × normalized_bm25_score
+fused_score = 0.75 × normalized_vector_score
+            + 0.25 × normalized_bm25_score
 ```
 
-BM25 权重略高，是当前中文评测集消融结果下的默认选择。配置中的权重会先裁剪为非负数，再按总和重新归一化，因此不要求两者手工相加等于 1。
+BGE 向量权重更高，是当前中文评测集消融结果下的默认选择。配置中的权重会先裁剪为非负数，再按总和重新归一化，因此不要求两者手工相加等于 1。
 
-## 11. 本地重排
+## 11. 中文 Cross-Encoder 重排
 
-融合后，对每个候选计算三个可解释的本地特征：
+融合后的前 `RAG_CANDIDATE_K` 个候选交给 `BAAI/bge-reranker-base`。模型同时读取 Query 与候选的标题、章节和正文，直接判断两者相关性。原有 Query 覆盖率、短语命中率和词面相似度仅保留在调试字段中，不再参与主排序，避免重复放大 BM25 的词面信号。
 
-| 特征 | 含义 |
-|---|---|
-| Query 覆盖率 | Query Token 中有多少出现在候选内容中 |
-| 短语命中率 | Query 的 2～4 字中文短语在候选内容中的命中比例 |
-| 词面相似度 | Query 与候选 Token 集合的 Jaccard 相似度 |
-
-重排公式为：
+默认重排公式为：
 
 ```text
-rerank_score = 0.65 × fused_score
-             + 0.15 × query_coverage
-             + 0.12 × phrase_score
-             + 0.08 × lexical_similarity
+rerank_score = 0.50 × cross_encoder_score
+             + 0.50 × fused_score
 ```
 
-重排完全在本地运行，结果确定，不需要调用大模型或额外 Reranker 服务。
+重排通过 FastEmbed ONNX 在本地执行，不调用外部服务。模型延迟加载；首次下载/加载或推理超过时限、模型异常时，本次检索自动退回 Hybrid 排序。安全风险知识的固定 Top-K 名额在重排之后执行，不受模型排序影响。
 
 ## 12. 第一名上下文扩展
 
@@ -264,7 +253,7 @@ rerank_score = 0.65 × fused_score
 | `vector` | 仅按 Chroma 向量原始分排序 |
 | `bm25` | 仅按 BM25 原始分排序 |
 | `hybrid` | 按归一化融合分排序 |
-| `reranked` | 按本地重排分排序 |
+| `reranked` | 按 Cross-Encoder 与融合分的组合分排序；降级时等于 `hybrid` |
 | `final` | 完成首块扩展和来源去重后的最终结果 |
 
 业务调用通常使用 `retrieve()`，它只返回 `final`。评测和问题定位使用 `retrieve_stages()` 比较各阶段变化。
@@ -305,11 +294,21 @@ rerank_score = 0.65 × fused_score
 | `RAG_COLLECTION_NAME` | `mindnook_knowledge` | Collection 名称前缀 |
 | `RAG_CHUNK_SIZE` | `512` | 最大 Chunk 字符数 |
 | `RAG_CHUNK_OVERLAP` | `64` | 相邻 Chunk 重叠字符数 |
-| `RAG_EMBEDDING_DIMENSION` | `384` | 本地向量维度 |
+| `RAG_EMBEDDING_PROVIDER` | `fastembed` | 正式中文 Embedding 运行时；测试可显式使用 `hash` |
+| `RAG_EMBEDDING_MODEL` | `BAAI/bge-small-zh-v1.5` | 中文检索 Embedding 模型 |
+| `RAG_EMBEDDING_CACHE_DIR` | `data/models` | 模型缓存目录 |
+| `RAG_EMBEDDING_DIMENSION` | `512` | BGE 向量维度 |
 | `RAG_CANDIDATE_K` | `12` | 每路最大候选数 |
 | `RAG_TOP_K` | `3` | 最终上下文数量 |
-| `RAG_VECTOR_WEIGHT` | `0.45` | 向量融合权重 |
-| `RAG_BM25_WEIGHT` | `0.55` | BM25 融合权重 |
+| `RAG_VECTOR_WEIGHT` | `0.75` | BGE 向量融合权重 |
+| `RAG_BM25_WEIGHT` | `0.25` | BM25 融合权重 |
+| `RAG_RERANKER_ENABLED` | `true` | 是否启用 Cross-Encoder 重排 |
+| `RAG_RERANKER_PROVIDER` | `fastembed` | 本地重排运行时 |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-base` | 中英文 Cross-Encoder 模型 |
+| `RAG_RERANKER_CACHE_DIR` | `data/models` | 重排模型缓存目录 |
+| `RAG_RERANKER_MODEL_WEIGHT` | `0.5` | Cross-Encoder 在最终重排分中的权重；当前评测集消融选择 |
+| `RAG_RERANKER_TIMEOUT_SECONDS` | `30` | 单次重排超时，超时回退 Hybrid |
+| `RAG_RERANKER_BATCH_SIZE` | `12` | 本地推理批大小 |
 
 修改维度会使用新的 Collection 名称。修改知识、切块参数或 Embedding 算法后，应重新运行严格评测，不能只确认服务能够启动。
 
@@ -333,7 +332,10 @@ python -m app.rag.evaluation --strict
 python -m app.rag.evaluation --evaluate-answers --strict
 ```
 
-当前评测集包含 85 条检索样例、15 条普通问答负样例，其中 10 条是安全关键样例，9 条带有跨 Chunk 证据标注。评测比较仅向量、仅 BM25、融合、重排和最终扩展五个阶段，同时输出 MRR@3、Top1 证据召回、阶段胜平负和挑战类型分层。新增样例重点覆盖口语、隐式表达、同义改写、错别字、长叙述、混合意图、隐式安全风险、第三人称危机、隐私伦理和困难负例。
+当前评测集包含 108 条样例：89 条检索样例、19 条普通问答负样例，其中
+13 条是安全关键样例，9 条带有跨 Chunk 证据标注。路由同时报告固定规则
+安全下限和完整 Runtime 最终路由；检索比较仅向量、仅 BM25、融合、重排和
+最终扩展五阶段。
 
 主要硬阈值：
 
@@ -346,17 +348,92 @@ python -m app.rag.evaluation --evaluate-answers --strict
 | 安全知识 Recall@3 | = 1.00 |
 | 上下文重复率 | ≤ 0.15 |
 
-截至 2026-08-08，扩展到 100 条后的仓库最新报告结果为：
+截至 2026-08-14，使用正式 BGE Embedding、Cross-Encoder 重排和安全 Top K 兜底后的结果为：
 
 ```text
-Hit@1               = 0.706
-Recall@3            = 0.859
-MRR@3               = 0.804
-nDCG@3              = 0.798
-Top1 证据召回       = 0.778
+Hit@1               = 0.888
+Recall@3            = 0.925
+MRR@3               = 0.919
+nDCG@3              = 0.905
+Top1 证据召回       = 1.000
+安全 Hit@1          = 1.000
+安全 Recall@3       = 1.000
+路由误触发率        = 0.000
 ```
 
-当前严格验收未通过。新挑战集显示：融合相对 BM25 提高 Recall@3，但降低 Hit@1；本地重排相对融合小幅提高 Recall@3 和 nDCG@3；上下文扩展不改变来源级排序，但将带标注样例的 Top1 证据召回从 0.389 提高到 0.778。隐式安全表达、口语改写、错别字、复杂混合意图和固定规则路由仍是主要短板。该结果应作为后续改进基线，不应通过删除困难样例或降低阈值使报告表面通过。
+当前严格验收仍未通过：Hit@1 已超过 0.85 阈值，Recall@3 距 0.95 阈值约
+2.5 个百分点。Cross-Encoder 相比融合阶段将 Hit@1 提高约 3.4 个百分点、
+nDCG@3 提高约 1.3 个百分点，Recall@3 持平；安全召回和引用/学术误触发已达到目标。
+
+### 16.1 四组核心消融实验
+
+以下实验于 2026-08-14 使用同一份评测集完成。通用条件固定为：89 条检索
+样例、Chunk `512/64`、Candidate K `12`、Top K `3`。除目标变量外，其余
+配置保持不变。Embedding 和召回实验比较对应检索阶段；Reranker 实验比较
+完成来源去重后的最终来源排序；安全策略实验只统计 13 条安全关键样例。
+
+#### A. Embedding 消融
+
+本组固定为纯向量召回，Hash 与 BGE 均使用 512 维，只替换 Embedding 实现。
+
+| Embedding | Hit@1 | Recall@3 | MRR@3 | nDCG@3 |
+|---|---:|---:|---:|---:|
+| Hash 本地特征 | 0.596 | 0.684 | 0.678 | 0.636 |
+| **BAAI/bge-small-zh-v1.5** | **0.843** | **0.918** | **0.901** | **0.879** |
+
+BGE 相比 Hash 将 Hit@1 提高 24.7 个百分点、Recall@3 提高 23.4 个百分点，
+是当前整体检索提升的主要来源。
+
+#### B. 召回融合消融
+
+本组固定使用 BGE Embedding，不启用 Reranker，分别观察纯向量、纯 BM25 和
+当前 `0.75/0.25` Hybrid 融合。
+
+| 召回方式 | Hit@1 | Recall@3 | MRR@3 | nDCG@3 |
+|---|---:|---:|---:|---:|
+| 纯向量 | 0.843 | 0.918 | **0.901** | 0.879 |
+| 纯 BM25 | 0.831 | 0.843 | 0.875 | 0.831 |
+| **Hybrid（向量 0.75 / BM25 0.25）** | **0.854** | **0.925** | 0.899 | **0.892** |
+
+Hybrid 相比纯向量将 Hit@1 提高 1.1 个百分点、Recall@3 提高 0.7 个百分点、
+nDCG@3 提高 1.3 个百分点；MRR 下降 0.2 个百分点。BM25 有正向净收益，
+但不适合单独承担主召回。
+
+#### C. Reranker 消融
+
+本组固定使用 BGE Hybrid 候选，并保留相同的安全知识策略。旧词面 Reranker
+为覆盖率、短语命中率和 Jaccard 特征公式；Cross-Encoder 使用
+`BAAI/bge-reranker-base`，模型分与融合分各占 0.5。
+
+| Reranker | Hit@1 | Recall@3 | MRR@3 | nDCG@3 |
+|---|---:|---:|---:|---:|
+| 不启用（Hybrid 原序） | 0.854 | 0.925 | 0.899 | 0.892 |
+| 旧词面特征公式 | 0.843 | **0.931** | 0.897 | 0.893 |
+| **BGE Cross-Encoder（权重 0.5）** | **0.888** | 0.925 | **0.919** | **0.905** |
+
+Cross-Encoder 相比不重排将 Hit@1 提高 3.4 个百分点、MRR 提高 2.1 个百分点、
+nDCG@3 提高 1.3 个百分点，Recall@3 持平。旧词面公式只小幅提高 Recall@3，
+同时损害 Top1，因此已退出生产主排序。
+
+#### D. 安全检索策略消融
+
+本组固定使用 BGE Hybrid、不启用 Reranker，只统计 13 条安全关键样例。
+“安全主题”表示为 RISK 查询加入安全风险、危机支持、当前安全和现实求助；
+“固定名额”表示安全知识固定占用一个 Top K 位置。
+
+| 安全检索策略 | Safety Hit@1 | Safety Recall@3 | MRR@3 | nDCG@3 |
+|---|---:|---:|---:|---:|
+| 不加安全主题、不固定名额 | 0.538 | 0.846 | 0.692 | 0.733 |
+| 仅加入安全主题 | **1.000** | **1.000** | **1.000** | **1.000** |
+| **安全主题 + 固定 Top K 名额** | **1.000** | **1.000** | **1.000** | **1.000** |
+
+安全主题在当前评测集上已将 Safety Hit@1 和 Recall@3 提升到 100%。固定名额
+没有产生额外可见增益，但它提供独立于 Embedding、BM25 和 Reranker 排序波动
+的安全下限，因此生产配置仍保留“安全主题 + 固定名额”。
+
+综合四组实验，当前推荐组合为：BGE 中文 Embedding、向量/BM25 `0.75/0.25`
+Hybrid、权重 `0.5` 的 BGE Cross-Encoder，以及安全主题与固定 Top K 名额。
+这些参数来自同一回归集，后续应增加不参与调参的保留集，防止过拟合。
 
 自动评测不能证明建议具有临床有效性。真实模型上线前仍需使用 `data/evaluation/回答质量人工评审表.md` 进行人工盲审。
 
@@ -382,11 +459,11 @@ Top1 证据召回       = 0.778
 
 ## 18. 当前限制
 
-- 本地 Embedding 是人工语义锚点与词面哈希组合，语义泛化能力弱于经过中文语料训练的神经 Embedding 模型。
-- 本地重排是确定性特征公式，不等同于 Cross-Encoder Reranker。
+- 正式 BGE 模型首次使用需要下载约 90 MB 文件；离线部署需预热模型缓存。
+- Cross-Encoder 提高了部署体积和 CPU 推理耗时，首次使用需要下载约 1 GB 模型。
 - BM25 和 Chunk 元数据保存在单进程内存中；当前实现没有独立索引服务或多实例同步机制。
 - 知识文件只从单一目录第一层加载，没有知识版本、审批状态、租户或权限过滤。
-- 当前 100 条评测集仍是单一回归集；继续调参时需要建立不参与调参的保留测试集，并逐步加入经脱敏和审核的真实线上表达，避免过拟合。
+- 当前 108 条评测集仍是单一回归集；继续调参时需要建立不参与调参的保留测试集，并逐步加入经脱敏和审核的真实线上表达，避免过拟合。
 - Chroma 0.5.x 在部分依赖组合下可能输出 telemetry 或 Pydantic 兼容性警告；只要严格评测和测试通过，这些警告不等于检索失败，但仍应在依赖升级时处理。
 
-后续若接入正式中文 Embedding 或独立 Reranker，应保持现有 `RetrievalHit`、`RetrievalStages`、严格评测和 ContextAgent 降级边界不变，先替换底层实现，再用五阶段报告验证收益。
+后续可根据评测结果切换更强模型，但应保持现有 `RetrievalHit`、`RetrievalStages`、严格评测和 ContextAgent 降级边界不变。

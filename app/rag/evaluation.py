@@ -264,6 +264,7 @@ def evaluate_retrieval(
                 risk_level=assessment.risk_level,
             ),
             limit=k,
+            risk_level=assessment.risk_level,
         )
         case_rankings: dict[str, list[str]] = {}
         case_metrics: dict[str, dict[str, float]] = {}
@@ -373,12 +374,11 @@ def evaluate_retrieval(
     }
 
 
-def evaluate_routing(cases: list[EvaluationCase]) -> dict:
+def _routing_metrics(cases: list[EvaluationCase], actual_values: list[bool]) -> dict:
     true_positive = false_positive = true_negative = false_negative = 0
     false_positive_cases: list[dict[str, str]] = []
     false_negative_cases: list[dict[str, str]] = []
-    for case in cases:
-        actual = assess_message(case.query).risk_level != "CHAT"
+    for case, actual in zip(cases, actual_values):
         if case.expect_rag and actual:
             true_positive += 1
         elif case.expect_rag and not actual:
@@ -401,6 +401,22 @@ def evaluate_routing(cases: list[EvaluationCase]) -> dict:
         "false_positive_rate": false_positive / max(1, negative_total),
         "false_positive_cases": false_positive_cases,
         "false_negative_cases": false_negative_cases,
+    }
+
+
+def evaluate_routing(
+    cases: list[EvaluationCase],
+    runtime: CoordinatorAgent,
+) -> dict:
+    """Report the deterministic safety floor and the complete production route."""
+    rule_values = [assess_message(case.query).risk_level != "CHAT" for case in cases]
+    runtime_values = [
+        runtime.run(case.query, []).assessment.risk_level != "CHAT"
+        for case in cases
+    ]
+    return {
+        "rule": _routing_metrics(cases, rule_values),
+        "runtime": _routing_metrics(cases, runtime_values),
     }
 
 
@@ -427,6 +443,7 @@ def evaluate_answers(
                     [],
                     risk_level=assessment.risk_level,
                 ),
+                risk_level=assessment.risk_level,
             )
             if case.evaluate_retrieval
             else []
@@ -487,7 +504,9 @@ def evaluate_thresholds(report: dict) -> dict:
     actual = {
         "hit_at_1": final["hit_at_1"],
         "recall_at_3": final["recall_at_3"],
-        "routing_false_positive_rate": report["routing"]["false_positive_rate"],
+        "routing_false_positive_rate": report["routing"]["runtime"][
+            "false_positive_rate"
+        ],
         "safety_hit_at_1": report["retrieval"]["safety_hit_at_1"],
         "safety_recall_at_3": report["retrieval"]["safety_recall_at_3"],
         "context_duplicate_rate": report["retrieval"]["context_duplicate_rate"],
@@ -539,6 +558,7 @@ def build_report(
 ) -> dict:
     categories = sorted({case.category for case in cases})
     challenge_tags = sorted({tag for case in cases for tag in case.challenge_tags})
+    runtime = CoordinatorAgent(MockModelProvider(), settings, rag_service=service)
     report = {
         "generated_at": datetime.now(UTC).isoformat(),
         "dataset": {
@@ -563,10 +583,17 @@ def build_report(
             "candidate_k": settings.rag_candidate_k,
             "top_k": settings.rag_top_k,
             "embedding_dimension": settings.rag_embedding_dimension,
+            "embedding_provider": settings.rag_embedding_provider,
+            "embedding_model": settings.rag_embedding_model,
             "vector_weight": settings.rag_vector_weight,
             "bm25_weight": settings.rag_bm25_weight,
+            "reranker_enabled": settings.rag_reranker_enabled,
+            "reranker_provider": settings.rag_reranker_provider,
+            "reranker_model": settings.rag_reranker_model,
+            "reranker_model_weight": settings.rag_reranker_model_weight,
+            "reranker_timeout_seconds": settings.rag_reranker_timeout_seconds,
         },
-        "routing": evaluate_routing(cases),
+        "routing": evaluate_routing(cases, runtime),
         "retrieval": evaluate_retrieval(service, cases, k=3),
     }
     if evaluate_answer_quality:
@@ -603,6 +630,8 @@ def render_markdown(report: dict) -> str:
             f"{value['ndcg_at_3']:.3f} | {value['top1_evidence_recall']:.3f} |"
         )
     routing = report["routing"]
+    rule_routing = routing["rule"]
+    runtime_routing = routing["runtime"]
     retrieval = report["retrieval"]
     lines.extend(
         [
@@ -653,25 +682,27 @@ def render_markdown(report: dict) -> str:
             "",
             "## 路由与上下文",
             "",
-            f"- 固定规则 RAG 触发召回率：{routing['recall']:.3f}",
-            f"- 普通问题误触发率：{routing['false_positive_rate']:.3f}",
+            f"- 固定规则 RAG 触发召回率：{rule_routing['recall']:.3f}",
+            f"- 固定规则普通问题误触发率：{rule_routing['false_positive_rate']:.3f}",
+            f"- 完整 Runtime RAG 触发召回率：{runtime_routing['recall']:.3f}",
+            f"- 完整 Runtime 普通问题误触发率：{runtime_routing['false_positive_rate']:.3f}",
             f"- 安全知识 Recall@3：{retrieval['safety_recall_at_3']:.3f}",
             f"- 安全知识 Hit@1：{retrieval['safety_hit_at_1']:.3f}",
             f"- 上下文重复率：{retrieval['context_duplicate_rate']:.3f}",
             f"- 第一名上下文扩展率：{retrieval['top_context_expansion_rate']:.3f}",
         ]
     )
-    if routing["false_positive_cases"]:
+    if runtime_routing["false_positive_cases"]:
         lines.extend(["", "固定规则误触发样例："])
         lines.extend(
             f"- {item['id']}：{item['query']}"
-            for item in routing["false_positive_cases"]
+            for item in runtime_routing["false_positive_cases"]
         )
-    if routing["false_negative_cases"]:
+    if runtime_routing["false_negative_cases"]:
         lines.extend(["", "固定规则漏触发样例（最多展示 20 条）："])
         lines.extend(
             f"- {item['id']}：{item['query']}"
-            for item in routing["false_negative_cases"][:20]
+            for item in runtime_routing["false_negative_cases"][:20]
         )
     lines.extend(
         [

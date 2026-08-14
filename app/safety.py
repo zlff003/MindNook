@@ -6,6 +6,50 @@ from dataclasses import dataclass
 
 CONTRAST_WORDS = ("但", "但是", "不过", "可是", "然而", "却")
 
+META_CONTEXT_MARKERS = (
+    "论文",
+    "理论",
+    "课程作业",
+    "文献",
+    "电影角色",
+    "电视剧角色",
+    "小说角色",
+    "台词",
+    "翻译",
+    "案例分析",
+    "教学案例",
+    "研究",
+)
+
+CURRENT_TIME_MARKERS = (
+    "现在",
+    "此刻",
+    "今晚",
+    "今天",
+    "马上",
+    "立刻",
+    "等会儿",
+    "刚刚",
+    "赶紧",
+)
+
+IMPLICIT_TERMINATION_PATTERNS = (
+    re.compile(r"(?:我|自己).*?(?:彻底)?消失"),
+    re.compile(r"(?:我|自己).*?(?:撑不下去|撑不住|不想再撑)"),
+    re.compile(r"(?:我|自己).*?活着.*?(?:没意思|没意义|没有意思|没有意义)"),
+    re.compile(r"(?:我|自己).*?(?:想|让|希望).*?一切.*?(?:停下来|结束)"),
+)
+
+IMPLICIT_DENIAL_PATTERNS = (
+    re.compile(r"我(?:现在|此刻|今晚)?(?:并不|不|没有|没)(?:想|要|会).*?消失"),
+    re.compile(r"我(?:现在|此刻|今晚)?(?:并不|不|没有|没).*?(?:撑不下去|活不下去)"),
+    re.compile(r"我只是(?:引用|翻译|分析|讨论)"),
+)
+
+META_PERSONAL_DISTRESS_PATTERNS = (
+    re.compile(r"我.*?(?:只是|但|不过).*?(?:有点|很|真的).*?(?:难受|害怕|焦虑|痛苦)"),
+)
+
 CLEAR_DENIAL_PATTERNS = (
     re.compile(r"我(?:现在)?(?:不想|不会|没有想过|没想过)自杀"),
     re.compile(r"我(?:现在)?(?:不会|没有)(?:想过)?伤害自己"),
@@ -53,6 +97,7 @@ SUPPORT_KEYWORDS = (
     "紧张",
     "低落",
     "难过",
+    "难受",
     "失眠",
     "睡不着",
     "孤独",
@@ -111,11 +156,48 @@ def _has_clear_danger(text: str) -> bool:
     )
 
 
+def _has_personal_current_danger(text: str) -> bool:
+    """Detect implicit danger from a combination of subject, time and intent."""
+    if not ("我" in text or "自己" in text):
+        return False
+    if any(pattern.search(text) for pattern in IMPLICIT_DENIAL_PATTERNS):
+        return False
+    matched = sum(bool(pattern.search(text)) for pattern in IMPLICIT_TERMINATION_PATTERNS)
+    current = any(marker in text for marker in CURRENT_TIME_MARKERS)
+    strong = any(marker in text for marker in ("彻底", "再也", "只想", "真想", "不想再"))
+    return matched >= 2 or (matched >= 1 and current and strong)
+
+
+def _is_meta_context(text: str) -> bool:
+    """Suppress quoted/academic risk language unless personal current danger remains."""
+    explicit_personal_danger = any(
+        pattern.search(text) for pattern in CLEAR_DANGER_PATTERNS
+    )
+    return any(marker in text for marker in META_CONTEXT_MARKERS) and not (
+        explicit_personal_danger or _has_personal_current_danger(text)
+    )
+
+
 def assess_message(text: str) -> Assessment:
     normalized = "".join(text.lower().split())
 
+    if _is_meta_context(normalized):
+        if any(pattern.search(normalized) for pattern in META_PERSONAL_DISTRESS_PATTERNS):
+            return Assessment(
+                risk_level="CONSULT",
+                confidence=0.76,
+                emotion_summary="学生在引用或讨论风险内容时也表达了个人困扰。",
+                reason_summary="元语境排除了直接高风险结论，但个人困扰仍需要支持。",
+            )
+        return Assessment(
+            risk_level="CHAT",
+            confidence=0.96,
+            emotion_summary="",
+            reason_summary="内容属于引用、翻译、理论或案例分析语境，未发现个人当前危险证据。",
+        )
+
     # 明确危险证据独立判断，消息其他位置的否认不能遮蔽自伤或伤人表达。
-    if _has_clear_danger(normalized):
+    if _has_clear_danger(normalized) or _has_personal_current_danger(normalized):
         return Assessment(
             risk_level="RISK",
             confidence=0.99,

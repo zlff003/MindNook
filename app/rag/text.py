@@ -101,6 +101,62 @@ class LocalChineseEmbedding:
         return [self.embed(text, document=document) for text in texts]
 
 
+class FastEmbedChineseEmbedding:
+    """Production Chinese embedding backed by a maintained ONNX model runtime."""
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-small-zh-v1.5",
+        *,
+        cache_dir: str | Path | None = None,
+        expected_dimension: int = 512,
+    ):
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:  # pragma: no cover - dependency contract
+            raise RuntimeError(
+                "fastembed is required for the configured RAG embedding provider"
+            ) from exc
+        self.model_name = model_name
+        self.dimension = TextEmbedding.get_embedding_size(model_name)
+        if self.dimension != expected_dimension:
+            raise ValueError(
+                f"embedding dimension mismatch: model={self.dimension}, "
+                f"configured={expected_dimension}"
+            )
+        self._model = TextEmbedding(
+            model_name=model_name,
+            cache_dir=str(Path(cache_dir).resolve()) if cache_dir else None,
+            lazy_load=True,
+        )
+
+    def embed(self, text: str, *, document: bool = False) -> list[float]:
+        method = self._model.passage_embed if document else self._model.query_embed
+        return list(next(iter(method([text]))).tolist())
+
+    def embed_many(
+        self,
+        texts: list[str],
+        *,
+        document: bool = False,
+    ) -> list[list[float]]:
+        method = self._model.passage_embed if document else self._model.query_embed
+        return [vector.tolist() for vector in method(texts)]
+
+
+def build_embedding(settings):
+    provider = settings.rag_embedding_provider.strip().lower()
+    if provider == "fastembed":
+        return FastEmbedChineseEmbedding(
+            settings.rag_embedding_model,
+            cache_dir=settings.rag_embedding_cache_dir,
+            expected_dimension=settings.rag_embedding_dimension,
+        )
+    if provider == "hash":
+        return LocalChineseEmbedding(settings.rag_embedding_dimension)
+    raise ValueError(f"unsupported RAG embedding provider: {provider}")
+
+
 class BM25Index:
     def __init__(self, documents: list[list[str]], *, k1: float = 1.5, b: float = 0.75):
         self.documents = documents

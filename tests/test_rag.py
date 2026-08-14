@@ -25,17 +25,126 @@ def rag_settings(**overrides) -> Settings:
         "rag_chroma_path": "unused-in-tests",
         "rag_chunk_size": 512,
         "rag_chunk_overlap": 64,
+        "rag_embedding_provider": "hash",
         "rag_embedding_dimension": 128,
         "rag_candidate_k": 10,
         "rag_top_k": 3,
         "rag_vector_weight": 0.45,
         "rag_bm25_weight": 0.55,
+        "rag_reranker_enabled": False,
     }
     values.update(overrides)
     return Settings(**values)
 
 
 class RAGTests(unittest.TestCase):
+    def test_cross_encoder_reranker_changes_hybrid_order(self):
+        class FakeReranker:
+            def score(self, query, documents, *, timeout):
+                self.query = query
+                self.documents = documents
+                self.timeout = timeout
+                return [0.05, 0.95, *([0.1] * (len(documents) - 2))]
+
+            @staticmethod
+            def status():
+                return {
+                    "enabled": True,
+                    "provider": "fake",
+                    "model": "fake-reranker",
+                    "state": "ready",
+                    "last_error": None,
+                }
+
+        client = chromadb.EphemeralClient(
+            settings=ChromaSettings(anonymized_telemetry=False)
+        )
+        reranker = FakeReranker()
+        settings = rag_settings(
+            rag_reranker_enabled=True,
+            rag_reranker_model_weight=0.9,
+        )
+        service = HybridRAGService(settings, client=client, reranker=reranker)
+
+        stages = service.retrieve_stages("晚上一直睡不着")
+
+        self.assertGreaterEqual(len(stages.hybrid), 2)
+        self.assertEqual(
+            stages.reranked[0].chunk.chunk_id,
+            stages.hybrid[1].chunk.chunk_id,
+        )
+        self.assertNotEqual(
+            stages.reranked[0].chunk.chunk_id,
+            stages.hybrid[0].chunk.chunk_id,
+        )
+        self.assertTrue(all("\n" in document for document in reranker.documents))
+
+    def test_reranker_failure_falls_back_to_hybrid(self):
+        class FailingReranker:
+            @staticmethod
+            def score(query, documents, *, timeout):
+                raise RuntimeError("reranker unavailable")
+
+            @staticmethod
+            def status():
+                return {
+                    "enabled": True,
+                    "provider": "fake",
+                    "model": "fake-reranker",
+                    "state": "degraded",
+                    "last_error": "reranker unavailable",
+                }
+
+        client = chromadb.EphemeralClient(
+            settings=ChromaSettings(anonymized_telemetry=False)
+        )
+        service = HybridRAGService(
+            rag_settings(rag_reranker_enabled=True),
+            client=client,
+            reranker=FailingReranker(),
+        )
+
+        stages = service.retrieve_stages("晚上一直睡不着")
+
+        self.assertEqual(
+            [hit.chunk.chunk_id for hit in stages.reranked],
+            [hit.chunk.chunk_id for hit in stages.hybrid],
+        )
+        self.assertIn("RuntimeError", service.status()["reranker"]["fallback_reason"])
+
+    def test_reranker_timeout_falls_back_to_hybrid(self):
+        class TimedOutReranker:
+            @staticmethod
+            def score(query, documents, *, timeout):
+                raise TimeoutError("reranker timeout")
+
+            @staticmethod
+            def status():
+                return {
+                    "enabled": True,
+                    "provider": "fake",
+                    "model": "fake-reranker",
+                    "state": "warming_up",
+                    "last_error": "reranker timeout",
+                }
+
+        client = chromadb.EphemeralClient(
+            settings=ChromaSettings(anonymized_telemetry=False)
+        )
+        service = HybridRAGService(
+            rag_settings(rag_reranker_enabled=True),
+            client=client,
+            reranker=TimedOutReranker(),
+        )
+
+        stages = service.retrieve_stages("晚上一直睡不着")
+
+        self.assertEqual(
+            [hit.chunk.chunk_id for hit in stages.reranked],
+            [hit.chunk.chunk_id for hit in stages.hybrid],
+        )
+        self.assertEqual(service.status()["reranker"]["fallback_reason"], "timeout")
+
     def test_markdown_chunking_uses_512_with_64_overlap(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
@@ -88,8 +197,8 @@ class RAGTests(unittest.TestCase):
             def __init__(self):
                 self.queries = []
 
-            def retrieve(self, query, *, topics=None, limit=None):
-                self.queries.append((query, topics, limit))
+            def retrieve(self, query, *, topics=None, limit=None, risk_level="CHAT"):
+                self.queries.append((query, topics, limit, risk_level))
                 return [FakeHit()]
 
         rag = RecordingRAG()
@@ -113,7 +222,7 @@ class RAGTests(unittest.TestCase):
             def __init__(self):
                 self.calls = 0
 
-            def retrieve(self, query, *, topics=None, limit=None):
+            def retrieve(self, query, *, topics=None, limit=None, risk_level="CHAT"):
                 self.calls += 1
                 return []
 
@@ -128,7 +237,7 @@ class RAGTests(unittest.TestCase):
     def test_context_agent_falls_back_when_hybrid_rag_is_unavailable(self):
         class FailingRAG:
             @staticmethod
-            def retrieve(query, *, topics=None, limit=None):
+            def retrieve(query, *, topics=None, limit=None, risk_level="CHAT"):
                 raise RuntimeError("rag unavailable")
 
         runtime = CoordinatorAgent(
@@ -148,6 +257,21 @@ class RAGTests(unittest.TestCase):
             context_events[-1].payload["retrieval_mode"],
             "builtin_fallback",
         )
+
+    def test_risk_retrieval_reserves_safety_source_in_top_k(self):
+        client = chromadb.EphemeralClient(
+            settings=ChromaSettings(anonymized_telemetry=False)
+        )
+        service = HybridRAGService(rag_settings(), client=client)
+
+        hits = service.retrieve(
+            "活着没意思，今晚只想让一切停下来",
+            topics=["当前安全"],
+            risk_level="RISK",
+        )
+
+        self.assertTrue(hits)
+        self.assertEqual(hits[0].chunk.source, "安全风险与危机支持边界.md")
 
 
 if __name__ == "__main__":

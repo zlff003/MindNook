@@ -36,6 +36,7 @@ pip-wheel-metadata/
 
 # Runtime data and generated files
 data/chroma/
+data/models/
 data/snapshots/
 data/exports/
 *.log

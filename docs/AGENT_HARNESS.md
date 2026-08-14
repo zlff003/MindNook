@@ -331,7 +331,7 @@ Runner 提供六类固定套件：
 | `risk-safety` | 高风险识别、报告、元数据隔离和工具入队 |
 | `agent-routing` | CHAT / CONSULT / RISK 与 Agent 步骤 |
 | `standard-skills` | 标准 Skill 校验、选择和 Workflow 注入 |
-| `rag` | 100 条评测集与召回指标 |
+| `rag` | 108 条评测集与召回指标 |
 | `api` | 健康、认证授权、SSE、管理员知识库接口 |
 | `tool-queue` | Excel、case、alert DAG、幂等、限流和死信 |
 
@@ -376,7 +376,7 @@ suites[].checks[].metrics
 - RAG 异常是否降级为内置关键词知识；
 - RAG 上下文是否贯穿到回复与 Trace。
 
-Engineering Harness 会运行 100 条 RAG 评测集，并报告 Hit@1、Recall@3、MRR@3、
+Engineering Harness 会运行 108 条 RAG 评测集，并报告 Hit@1、Recall@3、MRR@3、
 nDCG@3、安全召回与重复率。它使用稳定工程回归底线；更严格的发布验收仍单独运行：
 
 ```bash

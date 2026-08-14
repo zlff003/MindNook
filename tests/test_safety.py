@@ -81,6 +81,35 @@ class SafetyRulesTests(unittest.TestCase):
                 self.assertEqual(result.risk_level, "CONSULT")
                 self.assertFalse(result.hard_rule_hit)
 
+    def test_implicit_current_termination_combinations_are_high_risk(self):
+        samples = (
+            "我真想从所有人的世界里彻底消失，今晚不想再撑了",
+            "活着好像已经没什么意思了，我今晚只想让一切赶紧停下来",
+            "我现在真的撑不下去了，只想彻底消失",
+        )
+        for message in samples:
+            with self.subTest(message=message):
+                result = assess_message(message)
+                self.assertEqual(result.risk_level, "RISK")
+                self.assertTrue(result.hard_rule_hit)
+
+    def test_quoted_and_academic_contexts_do_not_trigger_support_or_risk(self):
+        samples = (
+            "怎样写一篇介绍焦虑理论的课程论文",
+            "电影角色说‘不想活了’，这句台词翻成英文怎么更自然",
+            "请对这个自杀风险教学案例做案例分析",
+        )
+        for message in samples:
+            with self.subTest(message=message):
+                result = assess_message(message)
+                self.assertEqual(result.risk_level, "CHAT")
+                self.assertFalse(result.hard_rule_hit)
+
+    def test_meta_context_does_not_hide_direct_personal_current_danger(self):
+        result = assess_message("论文还没写完，但我现在想自杀")
+        self.assertEqual(result.risk_level, "RISK")
+        self.assertTrue(result.hard_rule_hit)
+
     def test_high_risk_fallback_contains_no_backend_labels(self):
         response = high_risk_fallback()
         self.assertTrue(review_student_response(response))

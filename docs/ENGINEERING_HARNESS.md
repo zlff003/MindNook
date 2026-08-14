@@ -18,7 +18,7 @@ configured production database, Redis instance, or risk ledger.
 | `risk-safety` | Explicit high-risk detection, psychological report persistence, backend metadata isolation, durable tool-job enqueue |
 | `agent-routing` | `CHAT` / `CONSULT` / `RISK` routing, persisted Agent steps, collaboration actors |
 | `standard-skills` | Required Skill validation, CONSULT/RISK selection, Workflow injection |
-| `rag` | 100-case dataset coverage and Hit@1, Recall@3, MRR@3, nDCG@3, safety recall, duplicate-rate metrics |
+| `rag` | 108-case dataset coverage and Hit@1, Recall@3, MRR@3, nDCG@3, safety recall, duplicate-rate metrics |
 | `api` | Liveness/readiness, login, authorization, public SSE, admin knowledge status/sources/rebuild APIs |
 | `tool-queue` | Excel/case/alert DAG, idempotency, dependency, execution, rate limiting, dead letter |
 

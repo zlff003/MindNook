@@ -25,11 +25,21 @@ class Settings(BaseSettings):
     rag_collection_name: str = "mindnook_knowledge"
     rag_chunk_size: int = 512
     rag_chunk_overlap: int = 64
-    rag_embedding_dimension: int = 384
+    rag_embedding_provider: str = "fastembed"
+    rag_embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    rag_embedding_cache_dir: str = "data/models"
+    rag_embedding_dimension: int = 512
     rag_candidate_k: int = 12
     rag_top_k: int = 3
-    rag_vector_weight: float = 0.45
-    rag_bm25_weight: float = 0.55
+    rag_vector_weight: float = 0.75
+    rag_bm25_weight: float = 0.25
+    rag_reranker_enabled: bool = True
+    rag_reranker_provider: str = "fastembed"
+    rag_reranker_model: str = "BAAI/bge-reranker-base"
+    rag_reranker_cache_dir: str = "data/models"
+    rag_reranker_model_weight: float = 0.5
+    rag_reranker_timeout_seconds: float = 30.0
+    rag_reranker_batch_size: int = 12
     skills_dir: str = "skills"
 
     model_provider: str = "mock"

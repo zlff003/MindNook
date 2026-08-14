@@ -18,10 +18,10 @@ class RAGEvaluationTests(unittest.TestCase):
         cls.cases = load_cases(DEFAULT_DATASET)
 
     def test_labeled_dataset_has_expected_coverage(self):
-        self.assertEqual(len(self.cases), 100)
-        self.assertEqual(sum(case.evaluate_retrieval for case in self.cases), 85)
-        self.assertEqual(sum(not case.expect_rag for case in self.cases), 15)
-        self.assertEqual(sum(case.safety_critical for case in self.cases), 10)
+        self.assertEqual(len(self.cases), 108)
+        self.assertEqual(sum(case.evaluate_retrieval for case in self.cases), 89)
+        self.assertEqual(sum(not case.expect_rag for case in self.cases), 19)
+        self.assertEqual(sum(case.safety_critical for case in self.cases), 13)
         self.assertEqual(sum(bool(case.evidence_phrases) for case in self.cases), 9)
         self.assertEqual(len({case.category for case in self.cases}), 10)
         tags = {tag for case in self.cases for tag in case.challenge_tags}
@@ -78,6 +78,9 @@ class RAGEvaluationTests(unittest.TestCase):
         settings = Settings(
             app_env="test",
             rag_knowledge_dir=str(PROJECT_ROOT / "data" / "knowledge"),
+            rag_embedding_provider="hash",
+            rag_embedding_dimension=128,
+            rag_reranker_enabled=False,
         )
         client = chromadb.EphemeralClient(
             settings=ChromaSettings(anonymized_telemetry=False)
@@ -86,10 +89,12 @@ class RAGEvaluationTests(unittest.TestCase):
 
         report = build_report(service, settings, self.cases)
 
-        self.assertEqual(report["dataset"]["sample_count"], 100)
+        self.assertEqual(report["dataset"]["sample_count"], 108)
         self.assertEqual(report["dataset"]["evidence_sample_count"], 9)
         self.assertIn("stage_comparisons", report["retrieval"])
         self.assertIn("challenge_breakdown", report["retrieval"])
+        self.assertIn("rule", report["routing"])
+        self.assertIn("runtime", report["routing"])
         self.assertEqual(
             report["retrieval"]["stages"]["final"]["evidence_query_count"],
             9,

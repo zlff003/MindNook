@@ -103,6 +103,10 @@ class HarnessEnvironment:
             rag_chroma_path=str(self.root / "chroma"),
             rag_collection_name=f"mindnook_{name.replace('-', '_')}",
             rag_embedding_dimension=128,
+            rag_embedding_provider="hash",
+            rag_vector_weight=0.45,
+            rag_bm25_weight=0.55,
+            rag_reranker_enabled=False,
             skills_dir=str(PROJECT_ROOT / "skills"),
             excel_ledger_path=str(self.root / "risk-ledger.xlsx"),
             tool_worker_retry_base_seconds=0.01,
@@ -402,6 +406,7 @@ def _run_rag() -> list[CheckResult]:
         report = build_report(env.rag_service, env.settings, cases)
         final = report["retrieval"]["stages"]["final"]
         routing = report["routing"]
+        runtime_routing = routing["runtime"]
         acceptance = report["acceptance"]
         engineering_floor = {
             "hit_at_1": 0.65,
@@ -442,8 +447,8 @@ def _run_rag() -> list[CheckResult]:
                 safety_hit_at_1=retrieval["safety_hit_at_1"],
                 safety_recall_at_3=retrieval["safety_recall_at_3"],
                 context_duplicate_rate=retrieval["context_duplicate_rate"],
-                routing_recall=routing["recall"],
-                routing_false_positive_rate=routing["false_positive_rate"],
+                rule_routing=routing["rule"],
+                runtime_routing=runtime_routing,
                 engineering_floor=engineering_floor,
                 strict_acceptance_passed=acceptance["passed"],
                 strict_checks=acceptance["checks"],
@@ -477,6 +482,10 @@ def _run_api() -> list[CheckResult]:
             rag_chroma_path=str(root / "chroma"),
             rag_collection_name="mindnook_api_harness",
             rag_embedding_dimension=128,
+            rag_embedding_provider="hash",
+            rag_vector_weight=0.45,
+            rag_bm25_weight=0.55,
+            rag_reranker_enabled=False,
             skills_dir=str(PROJECT_ROOT / "skills"),
             excel_ledger_path=str(root / "risk-ledger.xlsx"),
             demo_student_username="student",
