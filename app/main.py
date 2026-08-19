@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from app.agents.runtime import CoordinatorAgent
+from app.account_schema import migrate_account_schema
 from app.api import admin, auth, student
 from app.core.config import Settings, get_settings
 from app.core.security import hash_password
@@ -50,13 +51,15 @@ def _seed_demo_users(session_factory, settings: Settings) -> None:
                 "admin",
             ),
         )
-        for username, password, display_name, role in seeds:
-            existing = db.scalar(select(User).where(User.username == username))
+        for institutional_id, password, name, role in seeds:
+            existing = db.scalar(
+                select(User).where(User.institutional_id == institutional_id)
+            )
             if not existing:
                 db.add(
                     User(
-                        username=username,
-                        display_name=display_name,
+                        institutional_id=institutional_id,
+                        name=name,
                         password_hash=hash_password(password),
                         role=role,
                     )
@@ -99,6 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        migrate_account_schema(engine)
         migrate_legacy_risk_levels(engine)
         Base.metadata.create_all(engine)
         _seed_demo_users(session_factory, app_settings)

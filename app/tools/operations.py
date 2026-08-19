@@ -33,7 +33,37 @@ LEDGER_HEADERS = (
     "emotion_summary",
     "reason_summary",
 )
+LEGACY_LEDGER_HEADERS = (
+    "report_id",
+    "student_id",
+    "created_at",
+    "dialogue_type",
+    "risk_level",
+    "confidence",
+    "emotion_summary",
+    "reason_summary",
+)
 _EXCEL_WRITE_LOCK = threading.Lock()
+
+
+def _normalized_ledger_risk_level(value, dialogue_type=None) -> str:
+    normalized = str(value or "").upper()
+    route = str(dialogue_type or "").lower()
+    if normalized in {"HIGH", "RISK"} or route == "safety_risk":
+        return "RISK"
+    if normalized in {"LOW", "MEDIUM", "CONSULT"} or route == "psychological_support":
+        return "CONSULT"
+    return "CHAT"
+
+
+def _migrate_legacy_ledger(sheet) -> None:
+    """Upgrade the pre-three-level ledger layout in place."""
+    for row in sheet.iter_rows(min_row=2):
+        row[4].value = _normalized_ledger_risk_level(
+            row[4].value,
+            row[3].value,
+        )
+    sheet.delete_cols(4, 1)
 
 
 class ToolOperations:
@@ -81,6 +111,9 @@ class ToolOperations:
                 workbook = load_workbook(path)
                 sheet = workbook.active
                 current_headers = tuple(cell.value for cell in sheet[1])
+                if current_headers == LEGACY_LEDGER_HEADERS:
+                    _migrate_legacy_ledger(sheet)
+                    current_headers = tuple(cell.value for cell in sheet[1])
                 if current_headers != LEDGER_HEADERS:
                     workbook.close()
                     raise RuntimeError("Excel ledger header version is incompatible")

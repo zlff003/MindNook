@@ -1,197 +1,275 @@
-# MindNook
+<div align="center">
 
-MindNook 是一个校园心理健康问答系统的最小可运行闭环，包含学生端和管理端。
+# 🌿 MindNook
 
-项目文档的职责边界、推荐阅读顺序和维护约定见 [文档索引](docs/INDEX.md)。
+**面向校园场景的多智能体心理支持与风险协作系统**
 
-## 本地运行
+从学生流式对话，到风险识别、知识检索、报告生成、个案跟进与审计留痕，构建一个可本地运行的完整闭环。
 
-MySQL 和 Redis 使用 Docker 启动，Python 后端直接在本机运行：
+<p>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white" alt="FastAPI 0.115+" />
+  <img src="https://img.shields.io/badge/Stage-MVP-F59E0B" alt="MVP" />
+  <img src="https://img.shields.io/badge/Model-Mock%20%7C%20OpenAI--compatible-7C3AED" alt="Model providers" />
+</p>
 
-```bash
-docker compose up -d mysql redis
+[快速开始](#-快速开始) · [核心能力](#-核心能力) · [系统架构](#-系统架构) · [配置模型](#-配置模型) · [测试验证](#-测试与评测) · [项目文档](#-项目文档)
+
+</div>
+
+> [!IMPORTANT]
+> MindNook 提供心理支持与校园工作协作能力，不进行医学诊断，也不能替代心理咨询、医疗服务或紧急救援。本项目当前用于本地开发和封闭演示，不应直接用于真实危机干预或生产环境。
+
+## ✨ 项目简介
+
+MindNook 是一个前后端一体的校园心理关怀 Web 应用。学生可以在独立会话中获得流式支持回复；系统在后台完成隐私脱敏、风险分级、多智能体协作和本地知识检索；授权管理员可以处理心理支持报告、风险个案、预警、审计记录和运行轨迹。
+
+系统默认使用确定性的 Mock 模型与 SQLite，因此无需模型 API 或容器即可启动。需要完整基础设施时，可切换到 MySQL、Redis 和任意 OpenAI-compatible 模型服务。
+
+## 🚀 核心能力
+
+| 能力 | 实现 |
+|---|---|
+| 💬 学生支持空间 | 学生注册与登录、多会话管理、SSE 流式回复、历史对话与主动停止生成 |
+| 🧠 多智能体协作 | Understanding、Safety、Context、Response Agent 通过追加式黑板协议完成理解、审查、检索和回复 |
+| 🛡️ 风险安全 | `CHAT` / `CONSULT` / `RISK` 三级路由，固定高风险规则提供不可被模型降级的安全下限 |
+| 🔎 本地混合 RAG | Markdown 知识库、Chroma 向量召回、BM25、加权融合、Cross-Encoder 重排与相邻上下文扩展 |
+| 🧩 场景 Skills | 7 个内置心理支持 Skill，支持启动校验、按主题加载、安全降级和管理员状态查看 |
+| 🗂️ 管理闭环 | 报告、个案分配、状态流转、跟进记录、邮件/日志预警、Excel 导出与用户管理 |
+| 🔐 隐私与审计 | PII 入模前脱敏、角色权限隔离、敏感原文访问与导出审计、完整 Agent Trace |
+| ⚙️ 工具治理 | 持久化任务 DAG、幂等、重试、限流、死信记录，以及 6 个 FastMCP stdio 工具 |
+
+## 🧭 系统架构
+
+```mermaid
+flowchart LR
+    Student[学生端<br/>/student] --> API[FastAPI<br/>认证 · 权限 · SSE]
+    Admin[管理端<br/>/admin] --> API
+
+    API --> Chat[ChatService]
+    Chat --> Harness[AgentHarness<br/>会话 · 脱敏 · 持久化]
+    Harness --> Runtime[Agent Runtime<br/>CollaborationBlackboard]
+
+    Runtime --> Model[Mock / OpenAI-compatible<br/>模型服务]
+    Runtime --> RAG[Chroma + BM25<br/>Embedding + Reranker]
+    Runtime --> Skills[心理场景 Skills]
+
+    Harness --> DB[(SQLite / MySQL)]
+    Harness --> Memory[(Redis<br/>短期与私有记忆)]
+    Harness --> Queue[异步工具队列]
+
+    Queue --> Excel[Excel 台账]
+    Queue --> Cases[风险个案]
+    Queue --> Alerts[邮件 / 日志预警]
+```
+
+一轮对话的核心协作链路：
+
+```text
+CoordinatorAgent
+  → UnderstandingAgent：识别意图、主题与知识需求
+  → SafetyAgent：评估风险并发布安全覆盖
+  → ContextAgent：加载记忆、RAG 证据与 Skills
+  → ResponseAgent：生成候选回复
+  → SafetyAgent：复核并按需触发修复
+  → CoordinatorAgent：发布 FINAL_ADOPTED
+```
+
+所有 Task、Artifact、Message 和 Event 都采用追加式记录。候选回复被修复时会保留历史版本，便于在管理端回溯完整决策过程。
+
+## 🧰 技术栈
+
+| 层级 | 技术 |
+|---|---|
+| 后端 | Python 3.11+、FastAPI、Uvicorn、SQLAlchemy |
+| 前端 | 原生 HTML、CSS、JavaScript |
+| 数据与记忆 | SQLite / MySQL、Redis、Chroma |
+| AI 与检索 | OpenAI-compatible API、FastEmbed、BGE Embedding、BM25、BGE Reranker |
+| 通信与工具 | Server-Sent Events、FastMCP、openpyxl、SMTP |
+| 测试 | unittest、pytest、自包含 Engineering Harness |
+
+## ⚡ 快速开始
+
+### 环境要求
+
+- Python `3.11+`
+- pip
+- Docker 与 Docker Compose（仅完整基础设施模式需要）
+
+### 方式一：轻量本地运行
+
+该方式使用默认 SQLite 和 Mock 模型，不要求模型密钥，也不要求启动 MySQL。
+
+**Windows PowerShell**
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-copy .env.example .env
 uvicorn app.main:app --reload --port 8080
 ```
 
-MySQL 默认映射到宿主机 `3307`（容器内仍为 `3306`），以避免与本机已有的 MySQL 冲突。需要更换时可在 `.env` 中修改 `MYSQL_HOST_PORT`，并同步调整 `DATABASE_URL`。
-
-macOS/Linux 复制配置使用：
+**macOS / Linux**
 
 ```bash
-cp .env.example .env
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8080
 ```
 
-检查基础设施：
+> [!NOTE]
+> 默认 RAG 使用 FastEmbed。首次触发知识检索时可能需要下载 BGE 模型并缓存到 `data/models/`；下载或向量服务不可用时，基础聊天与高风险安全回复仍可降级运行。
+
+### 方式二：MySQL + Redis
+
+复制完整配置并启动基础设施：
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+docker compose up -d mysql redis
+uvicorn app.main:app --reload --port 8080
+```
+
+```bash
+# macOS / Linux
+cp .env.example .env
+docker compose up -d mysql redis
+uvicorn app.main:app --reload --port 8080
+```
+
+MySQL 默认映射到宿主机 `3307`，Redis 使用 `6379`。修改 `MYSQL_HOST_PORT` 时，请同步调整 `.env` 中的 `DATABASE_URL`。
+
+检查或停止基础设施：
 
 ```bash
 docker compose ps
 docker compose exec redis redis-cli ping
 docker compose exec mysql mysqladmin ping -h localhost -uroot -proot-local
-```
-
-停止基础设施但保留数据卷：
-
-```bash
 docker compose down
 ```
 
-后端不构建、不运行在 Docker 中，仓库不再提供后端 Dockerfile。
+`docker compose down` 会停止容器但保留数据卷。Python 后端始终在宿主机运行，项目不提供后端 Dockerfile。
 
-也可以在不启动 MySQL 时使用默认 SQLite 配置进行纯本地开发：
+### 访问入口
 
-```bash
-python -m pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8080
+| 入口 | 地址 | 本地演示账号 |
+|---|---|---|
+| 学生端 | <http://127.0.0.1:8080/student> | `student` / `student123` |
+| 管理端 | <http://127.0.0.1:8080/admin> | `admin` / `admin123` |
+| OpenAPI | <http://127.0.0.1:8080/docs> | — |
+| 健康检查 | <http://127.0.0.1:8080/health/ready> | — |
+
+应用首次启动时会创建数据表、执行兼容迁移并写入演示账号。默认账号与密钥仅限本地开发，任何正式部署都必须更换。
+
+## 🤖 配置模型
+
+默认配置无需网络模型服务：
+
+```dotenv
+MODEL_PROVIDER=mock
 ```
 
-访问：
+切换到阿里百炼或其他 OpenAI-compatible API：
 
-- 学生端：<http://127.0.0.1:8080/student>
-- 管理端：<http://127.0.0.1:8080/admin>
+```dotenv
+MODEL_PROVIDER=openai_compatible
+MODEL_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL_API_KEY=your-api-key
+MODEL_NAME=qwen-plus
+```
 
-本地演示账号：
+`bailian` 仍可作为 `MODEL_PROVIDER` 的兼容别名。Understanding、Safety 和 Response Agent 也可以通过 `MODEL_UNDERSTANDING_NAME`、`MODEL_SAFETY_NAME`、`MODEL_RESPONSE_NAME` 分别指定模型。
 
-- 学生：`student` / `student123`
-- 管理员：`admin` / `admin123`
+常用配置：
 
-演示账号和默认密钥仅用于本地开发，部署前必须更换。
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./mindnook.db` | 业务数据库连接 |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | 短期记忆与 Agent 私有记忆 |
+| `MODEL_PROVIDER` | `mock` | `mock`、`openai_compatible` 或 `bailian` |
+| `MODEL_MAX_CALLS_PER_RUN` | `7` | 单轮最大模型调用次数 |
+| `AGENT_MAX_ROUNDS` | `16` | 单轮最大协作轮数 |
+| `RAG_KNOWLEDGE_DIR` | `data/knowledge` | Markdown 知识目录 |
+| `RAG_CHROMA_PATH` | `data/chroma` | Chroma 持久化目录 |
+| `EXCEL_LEDGER_PATH` | `data/exports/mindnook-risk-ledger.xlsx` | 风险台账输出路径 |
+| `SMTP_HOST` | 空 | 留空时使用本地日志预警 |
 
-## 测试
+全部配置及说明见 [.env.example](.env.example)。
+
+## 🧪 测试与评测
+
+运行全部单元与集成测试：
 
 ```bash
 python -m unittest discover -s tests
-```
-
-也可以运行：
-
-```bash
+# 或
 pytest
 ```
 
-运行完整 Agent 链路工程验证：
+运行隔离的六类工程验证：
 
 ```bash
 python -m app.harness.runner
+python -m app.harness.runner --json
+python -m app.harness.runner --suite risk-safety --suite tool-queue
 ```
 
-该命令以临时 SQLite、内存短期记忆和 Mock 模型执行六类工程验证；使用
-`--json` 输出机器可读报告，使用 `--suite <name>` 选择单个套件。
+Harness 使用临时 SQLite、内存短期记忆、确定性 Mock 模型、临时 RAG 索引和临时 Excel 文件，不会读写已配置的业务数据库、Redis 或风险台账。
 
-Harness 的职责边界与聊天编排见 [AgentHarness 工程链路说明](docs/AGENT_HARNESS.md)，一键验证套件见 [Engineering Harness](docs/ENGINEERING_HARNESS.md)。分层记忆、上下文压缩、Prompt 组装和审计记忆设计见 [上下文与分层记忆模块](docs/MEMORY.md)。
+运行 108 条中文样例的 RAG 回归评测：
 
-异步工具 Worker 的任务 DAG、幂等、重试、限流、死信以及 FastMCP stdio 用法见 [MCP 与异步工具队列](docs/MCP_AND_TOOL_QUEUE.md)。
+```bash
+python -m app.rag.evaluation
+python -m app.rag.evaluation --strict
+python -m app.rag.evaluation --evaluate-answers --strict
+```
 
-启动 MCP Server，或让示例客户端按风险执行报告工具链：
+`--strict` 会在任一硬性阈值不达标时返回非零状态，适合接入 CI。自动指标只用于发现回归，真实模型上线前仍需进行心理安全与回答质量人工盲审。
+
+## 🗂️ 项目结构
+
+```text
+MindNook/
+├── app/
+│   ├── agents/          # 多智能体 Runtime 与黑板协议
+│   ├── api/             # 认证、学生端与管理端 API
+│   ├── harness/         # 聊天编排与工程验证
+│   ├── memory/          # 短期、私有与审计记忆
+│   ├── mcp/             # FastMCP Server 与示例 Client
+│   ├── rag/             # 混合检索、重排与评测
+│   ├── services/        # 模型、任务、隐私与报告服务
+│   ├── static/          # 学生端与管理端页面
+│   └── main.py          # FastAPI 应用入口
+├── data/
+│   ├── evaluation/      # RAG 评测集、报告与人工评审表
+│   └── knowledge/       # 中文心理支持知识库
+├── docs/                # 产品与技术文档
+├── skills/              # 心理场景 Skill 资产
+├── tests/               # 单元与集成测试
+├── .env.example         # 完整配置示例
+└── docker-compose.yml   # MySQL 与 Redis
+```
+
+## 🔌 MCP 工具
+
+启动 stdio MCP Server，或使用示例客户端按风险等级执行报告工具链：
 
 ```bash
 python -m app.mcp.server
 python -m app.mcp.client <report_public_id> --risk RISK
 ```
 
-## 模型切换
+MCP 与后台队列复用同一业务层，覆盖 Excel 台账、个案创建、预警发送与确认、个案备注等操作。
 
-默认使用无需网络的 Mock Provider。复制 `.env.example` 为 `.env`，配置以下变量后可切换阿里百炼 OpenAI-compatible API：
+## 🔐 安全与隐私边界
 
-```text
-MODEL_PROVIDER=bailian
-MODEL_API_KEY=your-key
-MODEL_NAME=qwen-plus
-```
+- 手机号、邮箱和身份证号等信息会在进入模型与 Redis 短期记忆前脱敏。
+- 明确的高风险表达由固定规则优先识别，模型不能将其降级为普通聊天。
+- `RISK` 场景可能创建风险个案并触发邮件或日志预警，由授权人员继续处理。
+- 管理端查看敏感上下文、导出数据、处理个案和查看 Agent Trace 等操作会留下审计记录。
+- 对话、报告、个案、导出文件与运行轨迹都可能包含敏感信息，应实行最小权限和受控保留。
 
-聊天主链路按以下分层执行：
-
-```text
-HTTP（认证 + SSE）
-  -> ChatService（只转发公开事件）
-  -> AgentHarness（脱敏、会话、落库、报告、工具计划、Trace）
-  -> Agent Runtime（纯多 Agent 推理）
-```
-
-Agent Runtime 使用 CollaborationBlackboard 协作。Agent 不互相调用方法，而是 claim task、发布 artifact/message/event，再由黑板合并 AgentTurnResult：
-
-```text
-CoordinatorAgent 创建 root task
-  -> UnderstandingAgent 发布 intent
-  -> SafetyAgent 发布 risk / SAFETY_OVERRIDE
-  -> ContextAgent 发布 memory / RAG / Skill context
-  -> ResponseAgent 发布 response_proposal
-  -> SafetyAgent 发布 safety_review
-  -> CoordinatorAgent 发布 FINAL_ADOPTED
-```
-
-所有 Task、Artifact、Message 和 Event 都采用追加式记录；候选拒绝后的修复会保留 v1/v2，不覆盖历史。固定规则给出的高风险下限不能被模型降级；整个运行受最大协作轮数、模型调用次数和总时限限制。
-
-## 混合 RAG
-
-心理支持和安全场景默认由 ContextAgent 触发本地混合检索：
-
-```text
-中文 Markdown
-  -> 默认按 512 字符切块、相邻块重叠 64 字符
-  -> BAAI/bge-small-zh-v1.5 Embedding 写入 Chroma 并执行向量召回
-  -> BM25 关键词召回
-  -> 向量分与 BM25 分分别归一化，默认按 0.75 / 0.25 融合
-  -> 使用 BAAI/bge-reranker-base Cross-Encoder 本地重排
-  -> 为第一名补充同文档前后块
-```
-
-知识文件位于 `data/knowledge/*.md`，Chroma 持久化数据默认位于 `data/chroma/`。Embedding、BM25 和重排均在本地执行，不需要运行时下载额外模型。RAG 不可用时会降级到少量内置知识，不能阻断基础对话和安全回复。
-
-完整的索引生命周期、检索公式、ContextAgent 接入、评测和维护方式见 [RAG 模块](docs/RAG.md)。
-
-## 心理场景 Skills
-
-心理回复规则位于 `skills/*/SKILL.md`。每个 Skill 必须包含仅有 `name`、`description` 的 YAML frontmatter，以及 `## Workflow`。项目约定 Skill 名和目录名使用小写下划线并保持一致。
-
-Runtime 启动时扫描并校验 Skill；ContextAgent 根据风险等级和主题加载 Workflow，ResponseAgent 生成候选回复，SafetyAgent 按同一 Workflow 审查和修复。管理员可在“系统运行 → Skills”查看 `READY`、`WARN`、`FAILED` 状态。Skill 只提供场景表达规则，不负责任务调度、RAG 检索或数据库访问。
-
-七个内置 Skill、三级风险路由、校验状态、安全降级、交接摘要和维护测试方式见 [心理场景 Skill 系统](docs/SKILLS.md)。
-
-## RAG 评测
-
-评测集位于 `data/evaluation/RAG评测集.jsonl`，包含 85 条中文检索样例、15 条不应触发 RAG 的普通问答，其中 10 条为安全关键样例，另有 9 条跨 Chunk 证据标注。离线评测同时比较仅向量、仅 BM25、融合、重排、最终扩展五个阶段，并检查 Hit@1、Recall@3、MRR@3、nDCG@3、Top1 证据召回、阶段胜平负、挑战类型分层、路由误触发率、安全召回率和上下文重复率。
-
-生成 JSON 与中文 Markdown 报告：
-
-```bash
-python -m app.rag.evaluation
-```
-
-用于 CI，任一验收阈值不达标时返回非零状态：
-
-```bash
-python -m app.rag.evaluation --strict
-```
-
-需要额外运行 Mock 回复质量回归时：
-
-```bash
-python -m app.rag.evaluation --evaluate-answers
-```
-
-自动词面指标只能发现回归，真实模型上线前还需按 `data/evaluation/回答质量人工评审表.md` 进行人工盲审，特别检查事实支撑、资源真实性、隐私和危机响应。
-
-## 当前闭环
-
-- 两种账号角色与服务端权限隔离。
-- 学生多会话与 SSE 回复。
-- 普通交流、心理支持和安全风险分类。
-- 固定高风险规则与安全回复。
-- PII 脱敏后进入智能体运行层。
-- Redis 会话短期记忆：`mindbridge:short-term-memory:<session_id>`，最多 40 条、TTL 1 天。
-- Redis 未命中时从 `chat_messages` 最近 40 条回填。
-- 长历史按“最近 4 条学生关注、3 条助手支持和本轮输入”确定性压缩为最多 500 字的 `memoryBrief`；Prompt 保留最近 8 条带角色脱敏原文 `modelHistory`。
-- Understanding、Safety、Context、Response 使用互相隔离的 Agent 私有 Redis 记忆。
-- ContextAgent 默认使用 Chroma 向量召回、BM25、归一化融合、Cross-Encoder 重排和首块前后文扩展。
-- `agent_run_traces` 保存输入、脱敏输入、记忆、检索、评估和黑板协作审计记录。
-- 心理报告、工作台账、风险个案，以及可配置 SMTP 的邮件预警（未配置时使用日志渠道）。
-- 后台工具真实写入 `.xlsx` 派生台账，并采用报告 ID 去重和原子替换。
-- `tool_jobs` 持久化后台任务、依赖 DAG、幂等创建、指数重试、进程内限流和 `dead_letter_records` 死信记录。
-- 官方 FastMCP stdio Server 六个工具，并与队列共用 Excel、个案和预警业务层。
-- 管理端概览、报告、必要上下文、个案、预警和任务。
-- 管理端可查看 Agent Step 与完整 CollaborationBlackboard 事件序列。
-- 不依赖 HTTP 的 AgentHarness 验收、Runtime 单测与 API 集成测试。
-
-本版本用于本地开发和封闭演示，不应直接用于真实危机干预或生产环境。
+> [!CAUTION]
+> 生产部署前至少需要替换默认账号与密钥、采用正式密码算法和会话机制、限制 CORS、加固上传校验、配置数据加密与备份、建立审计和危机响应流程，并由心理专业人员与安全团队共同验收。

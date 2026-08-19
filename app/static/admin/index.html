@@ -34,8 +34,8 @@
             <h2>管理员登录</h2>
             <p class="form-copy">访问工作台、报告、个案和运行状态。</p>
             <div class="field">
-              <label for="username">账号</label>
-              <input id="username" name="username" autocomplete="username" required />
+              <label for="institutionalId">工号</label>
+              <input id="institutionalId" name="institutional_id" autocomplete="username" required />
             </div>
             <div class="field">
               <label for="password">密码</label>
@@ -83,6 +83,12 @@
             <a href="#/operations" data-route="operations">
               <span class="nav-index">05</span><span>系统运行</span>
             </a>
+            <a href="#/audit" data-route="audit">
+              <span class="nav-index">06</span><span>审计中心</span>
+            </a>
+            <a href="#/users" data-route="users">
+              <span class="nav-index">07</span><span>用户管理</span>
+            </a>
           </nav>
 
           <div class="admin-sidebar-foot">
@@ -125,7 +131,7 @@
                 <span class="metric-action">查看全部报告</span>
               </button>
               <button class="metric-card metric-link" type="button" data-nav="reports" data-risk="RISK">
-                <span class="metric-label">RISK 事件</span>
+                <span class="metric-label">高风险事件</span>
                 <strong id="highRiskCount" class="metric-value danger-value">—</strong>
                 <span class="metric-action">优先查看</span>
               </button>
@@ -146,7 +152,7 @@
                 <div class="panel-header">
                   <div>
                     <p class="panel-kicker">优先处理</p>
-                    <h2>最近 RISK 报告</h2>
+                    <h2>最近高风险报告</h2>
                   </div>
                   <a class="text-link" href="#/reports">查看全部</a>
                 </div>
@@ -172,14 +178,17 @@
                   <p class="panel-kicker">智能生成 · 人工复核</p>
                   <h2>心理支持报告</h2>
                 </div>
-                <label class="compact-field">
-                  <span>风险等级</span>
-                  <select id="riskFilter">
-                    <option value="">全部等级</option>
-                    <option value="CONSULT">CONSULT</option>
-                    <option value="RISK">RISK</option>
-                  </select>
-                </label>
+                <div class="filter-actions">
+                  <label class="compact-field">
+                    <span>风险等级</span>
+                    <select id="riskFilter">
+                      <option value="">全部等级</option>
+                      <option value="CONSULT">需要关注</option>
+                      <option value="RISK">高风险</option>
+                    </select>
+                  </label>
+                  <button id="exportReportsButton" class="small-btn" type="button">导出 Excel</button>
+                </div>
               </div>
               <div class="table-wrap">
                 <table>
@@ -206,17 +215,20 @@
                   <p class="panel-kicker">人工跟进闭环</p>
                   <h2>风险个案</h2>
                 </div>
-                <label class="compact-field">
-                  <span>个案状态</span>
-                  <select id="caseStatusFilter">
-                    <option value="">全部状态</option>
-                    <option value="pending">待处理</option>
-                    <option value="notified">已通知</option>
-                    <option value="assigned">已分配</option>
-                    <option value="following">跟进中</option>
-                    <option value="closed">已关闭</option>
-                  </select>
-                </label>
+                <div class="filter-actions">
+                  <label class="compact-field">
+                    <span>个案状态</span>
+                    <select id="caseStatusFilter">
+                      <option value="">全部状态</option>
+                      <option value="pending">待处理</option>
+                      <option value="notified">已通知</option>
+                      <option value="assigned">已分配</option>
+                      <option value="following">跟进中</option>
+                      <option value="closed">已关闭</option>
+                    </select>
+                  </label>
+                  <button id="exportCasesButton" class="small-btn" type="button">导出 Excel</button>
+                </div>
               </div>
               <div class="table-wrap">
                 <table>
@@ -224,6 +236,7 @@
                     <tr>
                       <th>风险</th>
                       <th>交接摘要</th>
+                      <th>负责人</th>
                       <th>状态</th>
                       <th>创建时间</th>
                       <th>操作</th>
@@ -234,6 +247,128 @@
               </div>
               <div id="casePagination" class="pagination"></div>
             </section>
+          </section>
+
+          <section class="admin-page hidden" data-page="audit" aria-labelledby="pageTitle">
+            <section class="panel page-panel">
+              <div class="panel-header filter-header">
+                <div>
+                  <p class="panel-kicker">敏感访问 · 重要操作</p>
+                  <h2>审计中心</h2>
+                </div>
+                <div class="filter-actions">
+                  <label class="compact-field">
+                    <span>操作</span>
+                    <select id="auditActionFilter">
+                      <option value="">全部操作</option>
+                      <option value="student_registered">学生注册账号</option>
+                      <option value="admin_account_created">创建管理员账号</option>
+                      <option value="report_context_viewed">查看报告敏感原文</option>
+                      <option value="case_owner_assigned">分配或转交个案</option>
+                      <option value="case_note_added">添加个案备注</option>
+                      <option value="case_status_changed">变更个案状态</option>
+                      <option value="case_history_viewed">查看个案处理记录</option>
+                      <option value="excel_exported">导出 Excel</option>
+                      <option value="agent_trace_viewed">查看 Agent 执行步骤</option>
+                      <option value="agent_collaboration_viewed">查看 Agent 协作事件</option>
+                      <option value="agent_audit_memory_viewed">查看 Agent 审计轨迹</option>
+                    </select>
+                  </label>
+                  <label class="compact-field">
+                    <span>资源类型</span>
+                    <select id="auditResourceFilter">
+                      <option value="">全部资源</option>
+                      <option value="user">用户账号</option>
+                      <option value="report">心理支持报告</option>
+                      <option value="case">风险个案</option>
+                      <option value="agent_run">Agent 运行</option>
+                      <option value="reports">报告导出</option>
+                      <option value="cases">个案导出</option>
+                      <option value="audit-logs">审计日志导出</option>
+                    </select>
+                  </label>
+                  <label class="compact-field">
+                    <span>操作人工号</span>
+                    <input id="auditActorFilter" placeholder="工号/学号" />
+                  </label>
+                  <button id="auditSearchButton" class="small-btn" type="button">查询</button>
+                  <button id="exportAuditButton" class="small-btn" type="button">导出 Excel</button>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>操作时间</th>
+                      <th>操作人</th>
+                      <th>操作</th>
+                      <th>资源</th>
+                      <th>详情</th>
+                    </tr>
+                  </thead>
+                  <tbody id="auditRows"></tbody>
+                </table>
+              </div>
+              <div id="auditPagination" class="pagination"></div>
+            </section>
+          </section>
+
+          <section class="admin-page hidden" data-page="users" aria-labelledby="pageTitle">
+            <div class="overview-grid user-management-grid">
+              <section class="panel page-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="panel-kicker">仅已有管理员可操作</p>
+                    <h2>创建管理员账号</h2>
+                  </div>
+                </div>
+                <form id="adminRegistrationForm" class="admin-registration-form">
+                  <label class="field">
+                    <span>工号</span>
+                    <input name="institutional_id" minlength="3" maxlength="64" required />
+                  </label>
+                  <label class="field">
+                    <span>姓名</span>
+                    <input name="name" maxlength="128" required />
+                  </label>
+                  <label class="field">
+                    <span>初始密码</span>
+                    <input name="password" type="password" minlength="8" autocomplete="new-password" required />
+                  </label>
+                  <label class="field">
+                    <span>确认密码</span>
+                    <input name="password_confirm" type="password" minlength="8" autocomplete="new-password" required />
+                  </label>
+                  <p id="adminRegistrationError" class="form-error" role="alert"></p>
+                  <button class="primary-btn" type="submit">创建管理员</button>
+                </form>
+              </section>
+              <section class="panel page-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="panel-kicker">数据库用户</p>
+                    <h2>用户列表</h2>
+                  </div>
+                  <label class="compact-field">
+                    <span>角色</span>
+                    <select id="userRoleFilter">
+                      <option value="">全部</option>
+                      <option value="student">学生</option>
+                      <option value="admin">管理员</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>学号/工号</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th></tr>
+                    </thead>
+                    <tbody id="userRows"></tbody>
+                  </table>
+                </div>
+                <div id="userPagination" class="pagination"></div>
+              </section>
+            </div>
           </section>
 
           <section class="admin-page hidden" data-page="alerts" aria-labelledby="pageTitle">
@@ -279,7 +414,7 @@
                 Agent 运行
               </button>
               <button id="skillsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="skills">
-                Skills
+                技能资产
               </button>
             </div>
 
@@ -345,14 +480,14 @@
               <div class="panel-header">
                 <div>
                   <p class="panel-kicker">可检查 · 可测试 · 可维护</p>
-                  <h2>Skill 资产状态</h2>
+                  <h2>技能资产状态</h2>
                 </div>
               </div>
               <div class="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Skill</th>
+                      <th>技能名称</th>
                       <th>状态</th>
                       <th>用途</th>
                       <th>校验信息</th>
@@ -367,7 +502,14 @@
       </section>
     </main>
 
-    <aside id="detailDrawer" class="detail-drawer" aria-hidden="true" aria-labelledby="drawerTitle">
+    <aside
+      id="detailDrawer"
+      class="detail-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-hidden="true"
+      aria-labelledby="drawerTitle"
+    >
       <button id="drawerBackdrop" class="drawer-backdrop" type="button" aria-label="关闭详情"></button>
       <section class="drawer-panel" tabindex="-1">
         <div class="drawer-header">
@@ -405,6 +547,22 @@
         <div class="dialog-actions">
           <button id="cancelNoteButton" class="ghost-btn" type="button">取消</button>
           <button class="primary-btn compact-btn" type="submit">保存备注</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ownerDialog" class="admin-dialog">
+      <form id="ownerForm">
+        <p class="eyebrow">个案分配</p>
+        <h2>设置个案负责人</h2>
+        <label class="field">
+          <span>负责人</span>
+          <select id="caseOwner" required></select>
+        </label>
+        <p id="ownerError" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancelOwnerButton" class="ghost-btn" type="button">取消</button>
+          <button class="primary-btn compact-btn" type="submit">确认分配</button>
         </div>
       </form>
     </dialog>

@@ -1,8 +1,10 @@
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy import func, select
 
 from app.agents.runtime import AgentRuntime
@@ -20,6 +22,7 @@ from app.models import (
     Message,
     PsychologicalReport,
     RiskCase,
+    User,
 )
 from app.services.model import MockModelProvider
 
@@ -101,14 +104,82 @@ class MindNookApiTests(unittest.TestCase):
 
     def test_pages_and_health_are_available(self):
         self.assertEqual(self.client.get("/health/live").status_code, 200)
-        self.assertEqual(self.client.get("/student").status_code, 200)
+        student_page = self.client.get("/student")
+        self.assertEqual(student_page.status_code, 200)
+        self.assertIn('id="historyToggleButton"', student_page.text)
+        self.assertIn('id="stopButton"', student_page.text)
+        self.assertIn('id="privacyDialog"', student_page.text)
         admin_page = self.client.get("/admin")
         self.assertEqual(admin_page.status_code, 200)
-        for route in ("overview", "reports", "cases", "alerts", "operations"):
+        for route in ("overview", "reports", "cases", "alerts", "operations", "audit", "users"):
             self.assertIn(f'data-route="{route}"', admin_page.text)
             self.assertIn(f'data-page="{route}"', admin_page.text)
         self.assertIn('id="detailDrawer"', admin_page.text)
+        self.assertIn('aria-modal="true"', admin_page.text)
         self.assertIn('id="reportPagination"', admin_page.text)
+        self.assertIn('id="exportReportsButton"', admin_page.text)
+        self.assertIn('id="exportCasesButton"', admin_page.text)
+        self.assertIn('id="exportAuditButton"', admin_page.text)
+
+    def test_student_registration_and_admin_created_account_use_institutional_ids(self):
+        student_response = self.client.post(
+            "/api/v1/auth/register/student",
+            json={
+                "institutional_id": "20260001",
+                "name": "张同学",
+                "password": "student-pass-2026",
+            },
+        )
+        self.assertEqual(student_response.status_code, 201)
+        self.assertEqual(student_response.json()["user"]["institutional_id"], "20260001")
+        self.assertEqual(student_response.json()["user"]["name"], "张同学")
+        self.assertNotIn("password", student_response.text)
+        duplicate_response = self.client.post(
+            "/api/v1/auth/register/student",
+            json={
+                "institutional_id": "20260001",
+                "name": "另一位同学",
+                "password": "student-pass-2026",
+            },
+        )
+        self.assertEqual(duplicate_response.status_code, 409)
+
+        forbidden_response = self.client.post(
+            "/api/v1/admin/users/admins",
+            headers=self._headers(student_response.json()["access_token"]),
+            json={
+                "institutional_id": "T9001",
+                "name": "未授权管理员",
+                "password": "admin-pass-2026",
+            },
+        )
+        self.assertEqual(forbidden_response.status_code, 403)
+
+        admin_response = self.client.post(
+            "/api/v1/admin/users/admins",
+            headers=self._headers(self.admin_token),
+            json={
+                "institutional_id": "T9001",
+                "name": "王老师",
+                "password": "admin-pass-2026",
+            },
+        )
+        self.assertEqual(admin_response.status_code, 201)
+        login_response = self.client.post(
+            "/api/v1/auth/login",
+            json={"institutional_id": "T9001", "password": "admin-pass-2026"},
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(login_response.json()["user"]["role"], "admin")
+        session = self.client.app.state.session_factory()
+        try:
+            registered = session.scalar(
+                select(User).where(User.institutional_id == "20260001")
+            )
+            self.assertEqual(registered.name, "张同学")
+            self.assertNotEqual(registered.password_hash, "student-pass-2026")
+        finally:
+            session.close()
 
     def test_only_two_roles_can_log_in_to_their_apis(self):
         student_admin_response = self.client.get(
@@ -122,6 +193,35 @@ class MindNookApiTests(unittest.TestCase):
             headers=self._headers(self.admin_token),
         )
         self.assertEqual(admin_student_response.status_code, 403)
+
+    def test_unauthenticated_requests_cannot_access_student_or_admin_apis(self):
+        self.assertEqual(self.client.get("/api/v1/conversations").status_code, 401)
+        self.assertEqual(self.client.get("/api/v1/admin/reports").status_code, 401)
+
+    def test_students_cannot_read_each_others_conversations(self):
+        conversation_id = self._create_conversation()
+        self._chat(
+            conversation_id,
+            "最近考试压力很大",
+            "request-owner-isolation-0001",
+        )
+        second_student = self.client.post(
+            "/api/v1/auth/register/student",
+            json={
+                "institutional_id": "20269999",
+                "name": "隔离测试学生",
+                "password": "student-pass-2026",
+            },
+        )
+        self.assertEqual(second_student.status_code, 201)
+
+        response = self.client.get(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            headers=self._headers(second_student.json()["access_token"]),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("最近考试压力很大", response.text)
 
     def test_general_chat_streams_without_report(self):
         conversation_id = self._create_conversation()
@@ -371,6 +471,96 @@ class MindNookApiTests(unittest.TestCase):
         event_types = [item["event_type"] for item in history_response.json()]
         self.assertEqual(event_types, ["created", "note_added", "status_changed"])
         self.assertEqual(self._count(CaseEvent), 3)
+
+    def test_case_owner_audit_center_and_excel_exports(self):
+        conversation_id = self._create_conversation()
+        source_text = "我想自杀，现在完全撑不住了\n我的手机号码是13800138000"
+        self._chat(conversation_id, source_text, "request-owner-export-0001")
+        owner = self.client.post(
+            "/api/v1/admin/users/admins",
+            headers=self._headers(self.admin_token),
+            json={
+                "institutional_id": "T8001",
+                "name": "李老师",
+                "password": "owner-pass-2026",
+            },
+        ).json()
+        case_item = self.client.get(
+            "/api/v1/admin/cases",
+            headers=self._headers(self.admin_token),
+        ).json()[0]
+        assignment = self.client.post(
+            f"/api/v1/admin/cases/{case_item['id']}/assign",
+            headers=self._headers(self.admin_token),
+            json={"owner_id": owner["id"]},
+        )
+        self.assertEqual(assignment.status_code, 200)
+        self.assertEqual(assignment.json()["owner"]["institutional_id"], "T8001")
+        self.assertEqual(assignment.json()["status"], "assigned")
+
+        history = self.client.get(
+            f"/api/v1/admin/cases/{case_item['id']}/events",
+            headers=self._headers(self.admin_token),
+        ).json()
+        assignment_event = next(
+            event for event in history if event["event_type"] == "owner_assigned"
+        )
+        self.assertEqual(assignment_event["actor"]["institutional_id"], "admin")
+
+        audit_response = self.client.get(
+            "/api/v1/admin/audit-logs?page=1&page_size=100&resource_type=case",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(audit_response.status_code, 200)
+        audit_count = self._count(AuditLog)
+        audit_items = audit_response.json()["items"]
+        self.assertIn(
+            "case_owner_assigned",
+            [item["action"] for item in audit_items],
+        )
+        assignment_audit = next(
+            item for item in audit_items if item["action"] == "case_owner_assigned"
+        )
+        self.assertEqual(assignment_audit["action_label"], "分配或转交个案")
+        self.assertEqual(assignment_audit["resource_type_label"], "风险个案")
+        self.assertIn("负责人：T8001", assignment_audit["detail_label"])
+
+        second_audit_response = self.client.get(
+            "/api/v1/admin/audit-logs?page=1&page_size=100",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(second_audit_response.status_code, 200)
+        self.assertEqual(self._count(AuditLog), audit_count)
+
+        export_values = {}
+        for export_type in ("reports", "cases", "audit-logs"):
+            response = self.client.get(
+                f"/api/v1/admin/exports/{export_type}.xlsx",
+                headers=self._headers(self.admin_token),
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("spreadsheetml", response.headers["content-type"])
+            workbook = load_workbook(BytesIO(response.content), read_only=True)
+            export_values[export_type] = [
+                str(value)
+                for row in workbook.active.iter_rows(values_only=True)
+                for value in row
+                if value is not None
+            ]
+
+        for export_type in ("reports", "cases"):
+            values = export_values[export_type]
+            self.assertIn("学生原始表达", values)
+            self.assertIn(source_text, values)
+            self.assertIn(
+                "本文件完整包含学生原始表达等敏感原文，请妥善保管并控制访问范围。",
+                values[1],
+            )
+        self.assertTrue(
+            any("原始表达摘录：" in value for value in export_values["cases"])
+        )
+        self.assertIn("分配或转交个案", export_values["audit-logs"])
+        self.assertIn("风险个案", export_values["audit-logs"])
 
 
 if __name__ == "__main__":

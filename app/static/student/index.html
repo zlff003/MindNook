@@ -33,10 +33,10 @@
           <form id="loginForm">
             <p class="eyebrow">学生空间</p>
             <h2>欢迎回来</h2>
-            <p class="form-copy">登录后继续你的私人对话空间。</p>
+            <p class="form-copy">登录后继续你的支持对话空间。</p>
             <div class="field">
-              <label for="username">账号</label>
-              <input id="username" name="username" autocomplete="username" required />
+              <label for="institutionalId">学号</label>
+              <input id="institutionalId" name="institutional_id" autocomplete="username" required />
             </div>
             <div class="field">
               <label for="password">密码</label>
@@ -50,7 +50,33 @@
             </div>
             <p id="loginError" class="form-error" role="alert"></p>
             <button class="primary-btn" type="submit">进入 MindNook</button>
+            <button id="showRegisterButton" class="auth-switch" type="button">没有账号？注册学生账号</button>
+            <button class="auth-switch privacy-link" type="button" data-privacy-info>了解隐私与人工跟进</button>
             <p class="demo-hint">本地演示账号：student / student123</p>
+          </form>
+          <form id="registerForm" class="hidden">
+            <p class="eyebrow">学生注册</p>
+            <h2>创建学生账号</h2>
+            <p class="form-copy">学号将作为你的登录账号。</p>
+            <div class="field">
+              <label for="registerInstitutionalId">学号</label>
+              <input id="registerInstitutionalId" name="institutional_id" autocomplete="username" minlength="3" maxlength="64" required />
+            </div>
+            <div class="field">
+              <label for="registerName">姓名</label>
+              <input id="registerName" name="name" autocomplete="name" maxlength="128" required />
+            </div>
+            <div class="field">
+              <label for="registerPassword">密码</label>
+              <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" required />
+            </div>
+            <div class="field">
+              <label for="registerPasswordConfirm">确认密码</label>
+              <input id="registerPasswordConfirm" name="password_confirm" type="password" autocomplete="new-password" minlength="8" required />
+            </div>
+            <p id="registerError" class="form-error" role="alert"></p>
+            <button class="primary-btn" type="submit">注册并进入 MindNook</button>
+            <button id="showLoginButton" class="auth-switch" type="button">已有账号？返回登录</button>
           </form>
         </div>
       </section>
@@ -63,6 +89,15 @@
           </div>
           <button id="newChatButton" class="primary-btn new-chat" type="button">
             ＋ 新对话
+          </button>
+          <button
+            id="historyToggleButton"
+            class="ghost-btn history-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="conversationList"
+          >
+            历史对话
           </button>
           <p class="conversation-label">最近对话</p>
           <nav
@@ -80,7 +115,9 @@
         <section class="chat-main">
           <header class="chat-header">
             <h1 id="conversationTitle">新的对话</h1>
-            <span class="safety-pill">安全场景可能触发人工跟进</span>
+            <button class="safety-pill" type="button" data-privacy-info>
+              人工跟进与隐私说明
+            </button>
           </header>
           <div id="messages" class="messages" aria-live="polite">
             <div id="welcome" class="welcome">
@@ -111,15 +148,36 @@
               <button id="sendButton" class="primary-btn send-btn" type="submit">
                 发送
               </button>
+              <button id="stopButton" class="ghost-btn stop-btn hidden" type="button">
+                停止
+              </button>
             </form>
             <p id="composerStatus" class="composer-note">
-              回答仅供支持与参考，不构成诊断或治疗建议。
+              Enter 发送 · Shift+Enter 换行 · 回答不构成诊断或治疗建议。
             </p>
           </div>
         </section>
       </section>
     </main>
+    <button id="conversationBackdrop" class="conversation-backdrop hidden" type="button" aria-label="关闭历史对话"></button>
+    <dialog id="privacyDialog" class="privacy-dialog" aria-labelledby="privacyTitle">
+      <form method="dialog">
+        <p class="eyebrow">使用说明</p>
+        <h2 id="privacyTitle">隐私与人工跟进</h2>
+        <p>
+          对话会用于生成心理支持报告。管理员在确有工作需要时，可查看报告及相关原始表达；敏感查看和导出会记入审计中心。
+        </p>
+        <p>
+          当系统识别到可能涉及安全风险的表达时，可能生成风险个案，由学校授权工作人员进行必要跟进。
+        </p>
+        <p class="privacy-emergency">
+          如果你正处于即时危险中，请优先联系身边可信任的人、学校正式支持渠道或当地紧急服务。
+        </p>
+        <div class="dialog-actions">
+          <button class="primary-btn compact-btn" value="close">我知道了</button>
+        </div>
+      </form>
+    </dialog>
     <script src="/static/student/student.js" defer></script>
   </body>
 </html>
-

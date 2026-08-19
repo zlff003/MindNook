@@ -4,6 +4,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import func, select
 
 from app.core.config import Settings
@@ -37,6 +38,7 @@ from app.services.tool_dispatcher import (
     ThreadedToolDispatcher,
     _PerMinuteRateLimiter,
 )
+from app.tools.operations import LEDGER_HEADERS
 
 
 def _count(db, model) -> int:
@@ -135,6 +137,54 @@ class TestToolQueueAndMcp:
             assert self.excel_path.is_file()
         finally:
             db.close()
+
+    def test_excel_ledger_migrates_legacy_header_and_risk_values(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "心理风险台账"
+        sheet.append(
+            (
+                "report_id",
+                "student_id",
+                "created_at",
+                "dialogue_type",
+                "risk_level",
+                "confidence",
+                "emotion_summary",
+                "reason_summary",
+            )
+        )
+        sheet.append(
+            (
+                "legacy-report",
+                "legacy-student",
+                "2026-08-01T00:00:00",
+                "psychological_support",
+                "low",
+                0.85,
+                "legacy emotion",
+                "legacy reason",
+            )
+        )
+        workbook.save(self.excel_path)
+        workbook.close()
+
+        report = self._report("RISK")
+        db = self.session_factory()
+        try:
+            enqueue_report_jobs(db, report, ["ledger_write"])
+            db.commit()
+        finally:
+            db.close()
+        InlineToolDispatcher(self.session_factory, self.settings).dispatch()
+
+        migrated = load_workbook(self.excel_path, read_only=True)
+        migrated_sheet = migrated.active
+        assert tuple(cell.value for cell in migrated_sheet[1]) == LEDGER_HEADERS
+        assert migrated_sheet["D2"].value == "CONSULT"
+        assert migrated_sheet["D3"].value == "RISK"
+        assert migrated_sheet.max_row == 3
+        migrated.close()
 
     def test_permanent_failure_is_recorded_once_in_dead_letter_table(self):
         db = self.session_factory()

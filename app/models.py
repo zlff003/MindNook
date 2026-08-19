@@ -13,7 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db import Base
 
@@ -33,12 +33,16 @@ class User(Base):
     public_id: Mapped[str] = mapped_column(
         String(36), default=new_public_id, unique=True, index=True
     )
-    username: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    display_name: Mapped[str] = mapped_column(String(128))
+    institutional_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128))
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(16), index=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    # Compatibility aliases for older internal integrations.
+    username = synonym("institutional_id")
+    display_name = synonym("name")
 
 
 class Conversation(Base):
@@ -200,6 +204,9 @@ class RiskCase(Base):
         ForeignKey("psychological_reports.id"), unique=True, index=True
     )
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     risk_level: Mapped[str] = mapped_column(String(16), index=True)
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     handoff_summary: Mapped[str] = mapped_column(Text)
@@ -208,6 +215,8 @@ class RiskCase(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+    owner: Mapped[User | None] = relationship(foreign_keys=[owner_id])
 
 
 class CaseEvent(Base):
