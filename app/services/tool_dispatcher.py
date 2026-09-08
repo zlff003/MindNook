@@ -11,7 +11,6 @@ from app.models import ToolJob
 from app.services.jobs import (
     ALERT_JOB_TYPES,
     CASE_JOB_TYPES,
-    EXCEL_JOB_TYPES,
     claim_due_jobs,
     execute_tool_job,
     mark_job_failure,
@@ -30,13 +29,9 @@ logger = logging.getLogger(__name__)
 class InlineToolDispatcher:
     """Deterministic dispatcher used by tests and standalone harness checks."""
 
-    def __init__(self, session_factory, settings: Settings | str):
+    def __init__(self, session_factory, settings: Settings):
         self.session_factory = session_factory
-        self.settings = (
-            settings
-            if isinstance(settings, Settings)
-            else Settings(app_env="test", excel_ledger_path=settings)
-        )
+        self.settings = settings
 
     def start(self) -> None:
         recover_stale_jobs(
@@ -75,13 +70,9 @@ class _PerMinuteRateLimiter:
 class ThreadedToolDispatcher:
     """Polling worker for durable tool jobs; dispatch() never runs tools inline."""
 
-    def __init__(self, session_factory, settings: Settings | str):
+    def __init__(self, session_factory, settings: Settings):
         self.session_factory = session_factory
-        self.settings = (
-            settings
-            if isinstance(settings, Settings)
-            else Settings(excel_ledger_path=settings)
-        )
+        self.settings = settings
         settings = self.settings
         self.operations = ToolOperations(session_factory, settings)
         self.worker_id = worker_identity()
@@ -93,10 +84,6 @@ class ThreadedToolDispatcher:
         self._in_flight_lock = threading.Lock()
         self._alert_limiter = _PerMinuteRateLimiter(
             settings.alert_rate_limit_per_minute
-        )
-        self._excel_executor = ThreadPoolExecutor(
-            max_workers=max(1, settings.tool_worker_excel_workers),
-            thread_name_prefix="mindnook-excel",
         )
         self._case_executor = ThreadPoolExecutor(
             max_workers=max(1, settings.tool_worker_case_workers),
@@ -129,8 +116,6 @@ class ThreadedToolDispatcher:
         self._wake.set()
 
     def _executor_for(self, job_type: str) -> ThreadPoolExecutor:
-        if job_type in EXCEL_JOB_TYPES:
-            return self._excel_executor
         if job_type in CASE_JOB_TYPES:
             return self._case_executor
         if job_type in ALERT_JOB_TYPES:
@@ -214,6 +199,5 @@ class ThreadedToolDispatcher:
         self._wake.set()
         if self._started:
             self._poller.join(timeout=max(1.0, self.settings.tool_worker_poll_seconds + 1))
-        self._excel_executor.shutdown(wait=True, cancel_futures=False)
         self._case_executor.shutdown(wait=True, cancel_futures=False)
         self._alert_executor.shutdown(wait=True, cancel_futures=False)

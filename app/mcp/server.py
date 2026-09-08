@@ -12,7 +12,7 @@ from app.tools.operations import ToolOperations
 mcp = FastMCP(
     "MindBridge Tools",
     instructions=(
-        "Durable MindBridge operations for report ledgers, risk cases and alerts. "
+        "Durable MindBridge operations for risk cases and alerts. "
         "All identifiers are MindBridge public IDs except alert_id."
     ),
     json_response=True,
@@ -25,12 +25,6 @@ def _operations() -> ToolOperations:
     engine = build_engine(settings.database_url)
     Base.metadata.create_all(engine)
     return ToolOperations(build_session_factory(engine), settings)
-
-
-@mcp.tool()
-def mindbridge_excel_report(report_id: str) -> dict:
-    """Idempotently append one psychological report to the Excel risk ledger."""
-    return _operations().excel_report(report_id)
 
 
 @mcp.tool()

@@ -1,18 +1,37 @@
-# MindNook 技术实施方案
+# MindNook 技术实施方案（历史蓝图与现状对照）
 
-> 文档版本：1.0  
-> 编制日期：2026-07-30  
-> 依据文档：[PRD.md](./PRD.md)、[TECHNICAL.md](./TECHNICAL.md)  
+> 文档版本：1.1
+> 编制日期：2026-07-30
+> 现状复核日期：2026-08-24
+> 依据文档：[PRD.md](./PRD.md)、[TECHNICAL.md](./TECHNICAL.md)
 > 适用范围：MindNook 校园心理健康问答系统的设计、开发、测试、部署与上线验收
 
 ---
+
+## 0. 阅读说明
+
+本文最初用于编码前的目标设计与阶段规划，保留了上线治理和后续能力蓝图，不是当前仓库结构或已完成功能清单。当前事实优先级为：代码与自动化测试 → 对应模块文档 → [技术总览](./TECHNICAL.md) → 本实施方案。
+
+当前代码基线：
+
+| 领域 | 当前实现 |
+|---|---|
+| 风险枚举 | `CHAT / CONSULT / RISK`；不存在现行业务枚举 `low / medium / high` |
+| 业务副作用 | `CHAT` 无；`CONSULT` 报告 + SQL 台账登记；`RISK` 报告 + SQL 台账登记 + 个案 + 预警 |
+| 数据库 | 代码默认 SQLite，可配置 MySQL；应用启动执行兼容迁移和 `create_all()`，没有 Alembic 目录 |
+| 知识 | `data/knowledge` 第一层 Markdown + Chroma/BM25；管理 API 只有状态、来源和重建 |
+| 角色 | 只有 `student` 与 `admin`；没有细粒度组织或资源范围授权 |
+| 部署 | Compose 只启动 MySQL 与 Redis；FastAPI 在宿主机运行 |
+| 尚未实现的目标态 | 知识上传/审核/版本快照、SSO/MFA、Token 撤销、独立 Worker、字段级加密、资源级权限、正式数据生命周期和上线审批材料 |
+
+以下章节凡与上表或当前模块文档不同，均按“历史设计/目标态”阅读，不能直接作为当前 API、Schema 或部署操作依据。
 
 ## 1. 实施目标
 
 本方案用于把产品需求拆解为可直接编码、测试和验收的技术任务。首个可用版本需要同时满足三条主线：
 
 1. 学生能够安全、稳定地进行普通问答和心理支持对话。
-2. 心理支持及安全风险对话能够形成内部报告，中高风险能够进入个案流程，高风险能够触发异步预警。
+2. `CONSULT` 和 `RISK` 对话形成内部报告与台账；只有 `RISK` 自动进入个案流程，并在个案任务成功后触发异步预警。
 3. 管理员能够在授权范围内维护知识、查看报告、处理个案、追踪异常和审计敏感操作。
 
 MindNook 是辅助支持系统，不提供临床诊断、药物建议或治疗方案。风险识别结果仅用于安全响应和人工跟进，不作为处分、诊断或强制决策的唯一依据。
@@ -57,7 +76,7 @@ PRD 中尚未确定的事项不能通过代码“猜测”。开发阶段统一�
 |---|---|---|
 | 角色划分 | 仅保留 `student` 和 `admin` 两种角色 | 明确管理员的数据访问范围和审批人 |
 | 普通问答 | 默认开启 | 由产品负责人确认是否保留 |
-| 风险标准 | 使用 PRD 的低/中/高三级和可配置规则 | 经心理、法律、伦理负责人书面审核 |
+| 风险标准 | 使用当前 `CHAT / CONSULT / RISK` 三级和固定规则下限 | 经心理、法律、伦理负责人书面审核 |
 | 原始对话访问 | 仅管理员在处理相关个案时可查看必要上下文 | 明确合法依据、访问范围和留痕规则 |
 | 数据保存期限 | 配置项存在，但不自动物理删除 | 确认保留、归档、匿名化和删除期限 |
 | 校园资源 | 初始为空，不内置虚构电话和办公时间 | 由学校提供并审核后发布 |
@@ -94,16 +113,16 @@ flowchart TB
     end
 
     subgraph Data[数据与检索]
-        MySQL[(MySQL)]
-        Redis[(Redis)]
+        DB[(SQLite / MySQL)]
+        Redis[(Redis，可选)]
         Chroma[(Chroma)]
-        Knowledge[Markdown / 上传文件]
+        Knowledge[data/knowledge/*.md]
     end
 
     subgraph External[外部能力]
-        Bailian[阿里百炼 API]
+        ModelProvider[Mock / OpenAI-compatible API]
         SMTP[SMTP / 通知渠道]
-        Excel[Excel 台账]
+        Export[管理员按需 Excel 导出]
     end
 
     S --> Auth
@@ -114,17 +133,18 @@ flowchart TB
     Service --> Harness
     Harness --> Rules
     Harness --> Agents
-    Agents --> Bailian
-    Agents --> Redis
+    Agents --> ModelProvider
     Agents --> Chroma
     Knowledge --> Chroma
-    Harness --> MySQL
+    Harness --> DB
+    Harness --> Redis
     Harness --> Report
     Report --> JobAPI
-    JobAPI --> MySQL
-    MySQL --> Worker[后台工作线程]
-    Worker --> Excel
+    JobAPI --> DB
+    DB --> Worker[后台工作线程]
     Worker --> SMTP
+    Admin --> Export
+    Export --> DB
     Admin --> MySQL
 ```
 
@@ -138,20 +158,20 @@ flowchart TB
 
 #### 数据库是事实数据源
 
-- MySQL 保存用户、会话、消息、报告、个案、任务、审计和知识元数据。
-- Redis 只用于可丢失的短期缓存、限流和会话近期记忆。
-- Chroma 保存可重建的向量索引。
-- Excel 是面向工作人员的派生台账，不作为报告或个案的主数据源。
+- 当前 SQLAlchemy 业务数据库保存用户、会话、消息、报告、个案、任务和审计；代码默认 SQLite，`.env.example` 选择 MySQL。
+- Redis 只用于可丢失的会话近期记忆和 Agent 私有记忆；工具预警限流当前使用进程内滑动窗口。
+- Chroma 保存可重建的向量索引，知识 Chunk 与 BM25 索引由 RAG 服务在内存维护，不写业务数据库。
+- `psychological_reports` 保存台账详细数据，`ledger_entries` 保存每份报告的唯一登记标记；管理员需要文件时从 SQL 即时生成 Excel。
 
 #### 数据库支持的进程内任务队列
 
 TECHNICAL 指定“进程内任务队列与线程池”，同时要求任务可重试并在服务重启后恢复。实现时采用：
 
-1. 业务事务内向 `background_jobs` 表写入任务。
-2. 进程内 worker 通过带锁查询领取任务。
-3. worker 在线程池执行 Excel、个案和通知操作。
-4. 执行状态、重试时间和错误写回数据库。
-5. 应用重启后重新领取 `pending` 或超时的 `running` 任务。
+1. 业务事务内向 `tool_jobs` 表写入任务。
+2. Dispatcher 按优先级领取到期的 `PENDING` 任务并置为 `RUNNING`。
+3. 分类型线程池执行个案和通知操作。
+4. 执行结果写为 `SUCCESS`，失败按指数退避回到 `PENDING`，超过次数进入 `DEAD` 并写 `dead_letter_records`。
+5. 应用启动时将遗留的全部 `RUNNING` 任务恢复为 `PENDING`。
 
 仅放在 Python 内存队列中的任务无法满足重启恢复要求，因此内存队列只能用于唤醒 worker，不能作为唯一存储。
 
@@ -162,6 +182,8 @@ TECHNICAL 指定“进程内任务队列与线程池”，同时要求任务可�
 ---
 
 ## 4. 推荐代码结构
+
+> 本节目录树是早期目标结构，不是当前仓库清单。当前项目没有 Repository 层、Alembic `migrations/`、拆分后的 reports/cases/knowledge API 文件或该测试分层；实际结构请以仓库和 [技术总览](./TECHNICAL.md) 为准。
 
 ```text
 MindNook/
@@ -298,6 +320,8 @@ MindNook/
 
 ### 5.2 核心实体
 
+> 本节保留早期目标数据字典。未在下文特别改成“当前”的字段可能尚未实现；当前 ORM 的唯一事实源是 `app/models.py`。
+
 #### `users`
 
 | 字段 | 类型 | 说明 |
@@ -354,15 +378,13 @@ MindNook/
 | `conversation_id` | BIGINT FK | 来源会话 |
 | `source_message_id` | BIGINT FK UNIQUE | 每条来源消息最多一个报告 |
 | `student_id` | BIGINT FK | 学生 |
-| `dialogue_type` | ENUM | `psychological_support/safety_risk` |
 | `emotion_summary` | TEXT | 事实化概况 |
-| `risk_level` | ENUM | `low/medium/high` |
-| `confidence` | DECIMAL | 后台参考值 |
+| `risk_level` | VARCHAR(16) | 当前为 `CONSULT/RISK`；`CHAT` 不生成报告 |
+| `confidence` | FLOAT | 后台参考值 |
 | `reason_summary` | TEXT | 简短判断理由 |
-| `evidence_json` | JSON | 最少必要证据或脱敏片段 |
-| `rule_hits_json` | JSON | 命中的固定安全规则 |
+| `handoff_summary` | TEXT | 事实化交接摘要 |
 | `generated_by_ai` | BOOLEAN | 固定为真，便于展示提示 |
-| `assessment_version` | VARCHAR(32) | 规则/评估版本 |
+| `created_at` | DATETIME | 创建时间 |
 
 索引：`(risk_level, created_at)`、`(student_id, created_at)`。
 
@@ -395,7 +417,7 @@ MindNook/
 | `actor_id` | BIGINT FK | 执行该操作的管理员 |
 | `occurred_at` | DATETIME | 发生时间 |
 
-#### `knowledge_sources` 与 `knowledge_chunks`
+#### 目标态：`knowledge_sources` 与 `knowledge_chunks`（当前未实现）
 
 `knowledge_sources` 保存文件、来源、审核、版本、有效期和发布状态；`knowledge_chunks` 保存分块文本、顺序、元数据、BM25 内容和向量索引引用。
 
@@ -418,24 +440,23 @@ published -> disabled
 
 过期或未审核资源不得进入学生可见回答。
 
-#### `background_jobs`
+#### 当前：`tool_jobs`
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | BIGINT PK | 任务主键 |
-| `job_type` | ENUM | `ledger_write/case_create/alert_send/...` |
+| `job_type` | VARCHAR(64) | 报告链路使用 `CASE_CREATE/ALERT_SEND`，业务操作还支持 3 个 MCP 类型 |
 | `idempotency_key` | VARCHAR(191) UNIQUE | 业务幂等键 |
-| `payload_json` | JSON | 最少必要参数 |
-| `status` | ENUM | `pending/running/succeeded/retry_wait/dead_letter` |
-| `priority` | INT | 高风险任务优先 |
-| `depends_on_job_id` | BIGINT NULL | 任务依赖 |
-| `attempt_count` | INT | 已尝试次数 |
-| `max_attempts` | INT | 最大尝试次数 |
-| `next_run_at` | DATETIME | 下次执行时间 |
-| `locked_by` | VARCHAR(128) | worker 标识 |
-| `locked_at` | DATETIME | 领取时间 |
-| `last_error_code` | VARCHAR(64) | 结构化错误码 |
-| `last_error_summary` | TEXT | 脱敏错误摘要 |
+| `report_id` | BIGINT NULL | 关联报告 |
+| `payload_json` | TEXT | JSON 参数 |
+| `status` | VARCHAR(24) | `PENDING/RUNNING/SUCCESS/DEAD` |
+| `priority` | INT | `CASE_CREATE=100`、`ALERT_SEND=90` |
+| `depends_on_job_id` | BIGINT NULL | 预警依赖个案任务 |
+| `attempts` | INT | 已尝试次数（ORM 属性名 `attempt_count`） |
+| `max_attempts` | INT | 最大尝试次数，默认 3 |
+| `run_after` | DATETIME | 下次执行时间 |
+| `locked_by` / `locked_at` | VARCHAR / DATETIME | Worker 领取信息 |
+| `last_error` | TEXT | 最近错误 |
 
 高风险任务优先级必须高于普通导出任务。
 
@@ -443,11 +464,9 @@ published -> disabled
 
 - `alert_deliveries`：渠道、接收配置引用、发送状态、频率抑制、外部消息 ID。
 - `ledger_entries`：报告到台账的唯一成功记录，`report_id` 唯一。
-- `agent_runs` / `agent_steps`：智能体运行摘要、耗时、结果状态和必要理由；默认不保存完整 Prompt。
-- `tool_audits`：工具调用目标、结果和错误摘要，不写密钥。
-- `audit_logs`：敏感读取和重要写操作。
-- `refresh_tokens` 或 `sessions`：正式登录会话。
-- `system_config_versions`：关键规则与配置版本、修改人和发布时间。
+- 当前 `agent_runs` / `agent_steps` 保存运行摘要；`agent_collaboration_events` 保存协作事件；`agent_run_traces` 还会保存包含 Prompt 与候选正文的完整高敏 Trace。
+- 当前 `audit_logs` 保存已接入的敏感读取、导出和重要写操作，但并非所有列表读取都审计。
+- `tool_audits`、`refresh_tokens/sessions`、`system_config_versions` 是目标态，当前没有这些表。
 
 ### 5.3 个案状态机
 
@@ -477,11 +496,10 @@ stateDiagram-v2
 
 | 环境 | 认证方式 |
 |---|---|
-| 本地开发 | 可通过功能开关启用 Basic Auth 和演示账号 |
-| 测试环境 | 正式密码摘要 + 短时访问令牌/安全 Cookie |
-| 生产环境 | 优先接入学校 SSO；管理员启用 MFA 或等效强认证 |
+| 当前本地/测试 | PBKDF2 密码摘要 + 自定义 HMAC Bearer Token；可 Seed 演示账号 |
+| 生产目标 | 学校 SSO 或正式会话；管理员启用 MFA 或等效强认证 |
 
-生产环境启动时执行安全配置检查，出现以下情况应拒绝启动或标记为不健康：
+以下启动安全检查属于生产目标态，当前代码尚未实现自动拒绝启动：
 
 - 存在公开默认密码。
 - 使用简单摘要或明文密码。
@@ -626,16 +644,11 @@ sequenceDiagram
 最终路由采用“固定规则下限 + 模型结构化判断”：
 
 ```text
-hard_rule_floor = 固定规则给出的最低风险级别
-model_result = 模型给出的类型、风险和理由
-final_risk = max(hard_rule_floor, model_result.risk)
-
-if hard_rule 命中明确危险:
-    dialogue_type = safety_risk
-elif model_result.type == general:
-    dialogue_type = general
-else:
-    dialogue_type = psychological_support
+risk_order = CHAT < CONSULT < RISK
+rule_floor = 固定规则给出的最低 risk_level
+intent_risk = UnderstandingAgent.risk_level
+model_risk = SafetyAgent.risk_level（仅 CONSULT/RISK 评估路径）
+final_risk = max(rule_floor, intent_risk, model_risk)
 ```
 
 模型不得覆盖固定规则的最低风险级别。模型调用失败时：
@@ -662,7 +675,7 @@ else:
 4. 生成“回应具体处境 + 1～2 个可执行步骤 + 必要现实支持建议”的候选回复。
 5. 安全审查通过后输出。
 6. 同一事务保存助手消息和心理报告。
-7. 投递台账任务；中风险额外投递个案任务。
+7. 同一事务写入报告和台账登记标记；`CONSULT` 不投递后台任务，也不会自动创建个案。
 
 ### 7.7 高风险链路
 
@@ -685,14 +698,11 @@ else:
 
 ```json
 {
-  "dialogue_type": "psychological_support",
+  "risk_level": "CONSULT",
   "topics": ["exam_stress", "sleep"],
-  "emotion_summary": "学生表达考试压力和入睡困难",
-  "risk_level": "low",
-  "confidence": 0.82,
-  "reason_summary": "存在持续困扰，但未表达伤害意图或即时危险",
   "needs_knowledge": true,
-  "needs_safety_question": false
+  "confidence": 0.82,
+  "reason": "存在持续困扰，但固定规则未识别到即时危险"
 }
 ```
 
@@ -818,7 +828,7 @@ Key 中不得直接使用学号、姓名或手机号。
 
 ### 10.1 文档接入
 
-支持 Markdown、TXT 和 PDF。上传流程：
+当前只扫描 `data/knowledge` 第一层的 UTF-8 Markdown，不存在上传接口、TXT/PDF 解析、审核状态、版本快照或回滚。以下上传流程属于目标态：
 
 1. 校验扩展名、MIME、文件头、文件大小和页数。
 2. 病毒/恶意内容扫描接口预留。
@@ -833,10 +843,9 @@ Key 中不得直接使用学号、姓名或手机号。
 
 ### 10.2 分块策略
 
-- 按 Markdown 标题、段落和列表等语义边界优先切分。
-- 初始块大小建议 400～800 中文字，重叠 80～150 字，后续通过 RAG 评测调整。
-- 每块保留来源、标题路径、页码/段落、版本、审核状态和有效期。
-- 联系方式、服务时间等资源信息尽量作为完整语义单元，不跨块拆散。
+- 当前按最多 512 字符、重叠 64 字符切块，并优先在段落、换行或中文标点边界结束。
+- Chunk 保留 `source`、顺序、总块数和正文；当前没有页码、审核状态、版本或有效期字段。
+- 更复杂的标题层级、审核/有效期元数据属于目标态。
 
 ### 10.3 混合检索
 
@@ -845,26 +854,25 @@ query
   ├─ vector top_k
   └─ BM25 top_k
           ↓
- Reciprocal Rank Fusion / 加权融合
+ 归一化加权融合（默认向量 0.75 / BM25 0.25）
           ↓
- 本地重排
+ Cross-Encoder 重排（默认与融合分各占 0.5）
           ↓
  相邻上下文扩展
           ↓
  权限、发布状态、有效期过滤
 ```
 
-只在心理支持、安全风险或明确咨询校园心理资源时检索心理知识。普通问答不做无意义检索。
+只在最终 `risk_level` 为 `CONSULT` 或 `RISK` 时检索心理知识；`CHAT` 不触发 RAG。当前查询异常时由 ContextAgent 降级到内置关键词知识。
 
 ### 10.4 降级策略
 
 | 故障 | 行为 |
 |---|---|
-| Embedding API 故障 | 使用 BM25 和本地词面检索 |
-| Chroma 故障 | 使用数据库/BM25 索引 |
-| 全部检索不可用 | 使用不含具体校园信息的通用安全支持 |
-| 校园资源过期 | 不引用该资源，记录运维告警 |
-| 索引重建失败 | 保留上一已发布快照 |
+| RAG 初始化或检索抛出异常 | ContextAgent 使用 `app/agents/knowledge.py` 的内置关键词知识 |
+| RAG 没有命中 | 使用空知识上下文继续，不编造具体校园资源 |
+| `RISK` | 固定规则与 SafetyAgent 保证安全下限，不依赖检索成功 |
+| 知识文件变化 | 下一次 `status/retrieve/rebuild` 检测签名并重建索引 |
 
 ### 10.5 质量评测
 
@@ -890,10 +898,10 @@ query
 心理支持或安全风险回复完成时，在一个数据库事务中：
 
 1. 保存助手消息。
-2. 保存心理报告。
-3. 创建 `ledger_write:{report_id}` 任务。
-4. 中高风险创建 `case_create:{report_id}` 任务。
-5. 高风险创建 `alert_send:{report_id}` 任务，并依赖个案创建任务。
+2. 保存心理报告详细数据。
+3. 写入与报告一一对应的 `ledger_entries` 登记标记。
+4. 只有 `RISK` 创建 `case_create:{report_public_id}` 任务。
+5. 只有 `RISK` 创建 `alert_send:{report_public_id}` 任务，并依赖个案创建任务。
 
 事务提交后 worker 才可领取任务。任一步骤回滚时，不得出现只有预警、没有报告的半成品。
 
@@ -903,30 +911,27 @@ query
 |---|---|
 | 聊天请求 | `chat:{conversation_id}:{client_request_id}` |
 | 报告 | 数据库唯一约束 `source_message_id` |
-| 台账 | `ledger_write:{report_id}` |
-| 个案 | `case_create:{report_id}` |
-| 预警 | `alert_send:{report_id}:{channel}:{policy_window}` |
+| 台账登记 | `ledger_entries.report_id` 唯一约束 |
+| 个案 | `case_create:{report_public_id}` |
+| 预警 | `alert_send:{report_public_id}` |
 
 handler 开始前检查目标业务记录是否已经成功存在，重试不能重复发送或重复写入。
 
 ### 11.3 重试策略
 
-- 可重试错误：网络超时、SMTP 临时错误、文件锁、数据库瞬时连接错误。
+- 可重试错误：网络超时、SMTP 临时错误、数据库瞬时连接错误。
 - 不可重试错误：配置缺失、收件人无效、权限拒绝、Payload 校验失败。
 - 建议指数退避并加入随机抖动，如 1、5、15、30 分钟。
-- 达到最大次数转入 `dead_letter`，保留脱敏原因和最近一次尝试时间。
-- 管理员修复配置后可以重新投递，重新投递本身写审计。
+- 达到最大次数转为 `DEAD` 并写入 `dead_letter_records`。
+- 管理端按报告请求聚合展示已结束的任务流程；流程中存在 `PENDING` 或 `RUNNING` 任务时整组不展示。管理员可以重新执行组内 `DEAD` 步骤，已成功步骤保持不变，操作写入审计日志。
 
-### 11.4 Excel 台账
+### 11.4 SQL 台账与按需 Excel 导出
 
-- 从 `psychological_reports` 和 `ledger_entries` 生成。
-- 通过文件锁或单 worker 串行写入，避免并发破坏工作簿。
-- 写入临时文件并原子替换目标文件。
-- 每行保存报告公开 ID，不写不必要的完整对话。
-- 定期校验工作簿可打开、表头版本正确、记录数与 `ledger_entries` 一致。
-- Excel 写入失败不影响 MySQL 中的报告和个案。
-
-生产阶段建议把“在线查询”建立在数据库上，Excel 仅用于经授权的导出或兼容现有工作流。
+- `psychological_reports` 是台账详细数据源，保存报告公开 ID、学生、风险等级、置信度和摘要等字段。
+- `ledger_entries` 是台账登记标记，通过 `report_id` 唯一约束保证一份报告只登记一次。
+- 报告与登记标记在同一数据库事务中提交，任一写入失败都会整体回滚。
+- 管理员导出接口按筛选条件查询 SQL，并在内存中生成 `.xlsx` 响应，不写入或维护本地常驻文件。
+- 导出行为记录管理员审计日志，文件内容只包含授权查询范围内的数据。
 
 ### 11.5 预警最小内容
 
@@ -961,7 +966,7 @@ handler 开始前检查目标业务记录是否已经成功存在，重试不能
 GET /api/v1/admin/dashboard/summary?from=&to=
 ```
 
-返回报告数、高风险事件数、待跟进个案数、预警失败数和死信任务数。查询采用聚合索引和明确时间范围，不直接扫描消息正文。
+返回报告数、高风险事件数、待跟进个案数、预警失败数和失败处理流程数。失败流程按报告去重统计，查询采用聚合索引和明确时间范围，不直接扫描消息正文。
 
 ### 12.2 报告管理
 
@@ -1009,14 +1014,17 @@ POST /api/v1/admin/knowledge/index/rebuild
 
 ```text
 GET  /api/v1/admin/jobs
-GET  /api/v1/admin/dead-letters
-POST /api/v1/admin/dead-letters/{id}/retry
+GET  /api/v1/admin/job-groups
+POST /api/v1/admin/job-groups/{report_id}/retry
 GET  /api/v1/admin/alerts
 GET  /api/v1/admin/agent-runs
-GET  /api/v1/admin/audits
+GET  /api/v1/admin/skills
+GET  /api/v1/admin/audit-logs
 ```
 
-以上能力全部位于管理端。管理员查看心理个案正文必须经过权限校验并记录审计，任务和服务状态页面不默认加载敏感正文。
+`job-groups` 仅返回全部步骤已经结束的报告流程，并把同一报告的个案创建和预警发送合并展示。只要组内还有等待或执行中的步骤，整个流程就不出现在管理页面；重新执行只重置失败步骤，并记录二次确认后的审计信息。
+
+以上能力全部位于管理端。管理员查看心理个案正文必须经过权限校验并记录审计，任务和服务状态页面不默认加载敏感正文，任务标识和错误细节在技术详情中按需展开。
 
 ---
 
@@ -1131,7 +1139,7 @@ DEV_BASIC_AUTH_ENABLED
 | 固定规则异常 | 采用更保守的安全回退，禁止静默跳过 | 服务进入 degraded/不健康 |
 | Chroma/Embedding 异常 | BM25 回退 | 标记检索降级 |
 | 安全审查失败 | 最多重写一次，仍失败则安全模板 | 保存失败摘要 |
-| Excel 写入失败 | 不影响回复 | 自动重试，最终死信 |
+| 管理员 Excel 导出失败 | 不影响学生回复和 SQL 台账 | 提示管理员稍后重新下载 |
 | 个案创建失败 | 不影响回复 | 高优先级重试；预警任务保持依赖等待 |
 | SMTP 失败 | 不影响回复 | 自动重试，最终死信和后台醒目标识 |
 | 客户端断开 | 已完成结果保持幂等可恢复 | 清理连接资源 |
@@ -1203,7 +1211,7 @@ Redis、Chroma 或 SMTP 故障可使服务标记为 `degraded`，不一定使聊
 - 记忆压缩：不新增事实、不固化风险标签。
 - 个案状态机：合法迁移、非法迁移、乐观锁。
 - 任务幂等、依赖、退避、死信和重启恢复。
-- Excel 原子写入和重复报告去重。
+- 报告与 SQL 台账登记的事务一致性和重复报告去重。
 - Prompt 输出 Schema 校验和回退。
 
 ### 17.2 集成测试
@@ -1249,7 +1257,7 @@ Redis、Chroma 或 SMTP 故障可使服务标记为 `degraded`，不一定使聊
 | 场景 | 预期结果 |
 |---|---|
 | 普通编程问题 | 正常回答；无报告、台账、个案、预警 |
-| 考试焦虑且无危险表达 | 共情 + 少量步骤；生成低/中风险报告 |
+| 考试焦虑且无危险表达 | 共情 + 少量步骤；最终为 `CONSULT` 时生成报告和台账，不建案 |
 | 明确即时自伤表达 | 安全优先回复；报告、台账、个案和预警任务齐全 |
 | SMTP 中断 | 学生正常收到回复；预警重试后进入异常列表 |
 | Redis 中断 | 对话仍可继续；上下文从 MySQL 加载 |
@@ -1261,49 +1269,39 @@ Redis、Chroma 或 SMTP 故障可使服务标记为 `degraded`，不一定使聊
 ### 17.6 测试命令规划
 
 ```bash
-python -m unittest discover -s tests
+python -m pytest -q
 python -m app.harness.runner
-python -m scripts.evaluate_rag
+python -m app.rag.evaluation
 ```
 
-后续可在 `pyproject.toml` 中统一为 `pytest` 命令，但应保留 TECHNICAL 中约定的兼容入口。
+当前测试以 `pytest` 为准；Engineering Harness 还支持可重复的 `--suite` 和 `--json`，RAG 严格门禁可加 `--strict`。
 
 ---
 
 ## 18. 部署方案
 
-### 18.1 Docker Compose 服务
+### 18.1 当前 Docker Compose 范围
 
 ```text
-app          FastAPI + Uvicorn
-mysql        业务数据库
-redis        短期缓存与限流
+mysql        MySQL 8.4 业务数据库
+redis        Redis 7.4 可选记忆缓存
 ```
 
-Chroma 首版可嵌入应用并挂载持久卷；需要水平扩容时改为独立向量服务或共享向量基础设施。
-
-挂载目录：
-
-- `data/chroma`：向量索引。
-- `data/snapshots`：知识索引快照。
-- `data/exports`：Excel 台账或授权导出。
+当前 Compose 不包含 `app` 服务；FastAPI 在宿主机用 Uvicorn 运行。Chroma 嵌入应用，默认持久化到 `data/chroma`；心理台账只存储在 SQL 中，Excel 由管理员按需导出，不维护本地常驻文件。当前没有 `data/snapshots` 发布快照机制。
 
 敏感目录限制容器和宿主机权限，不通过静态文件路由公开。
 
 ### 18.2 启动顺序
 
-1. 校验配置和生产安全项。
-2. 等待 MySQL 可用。
-3. 执行显式数据库迁移。
-4. 加载并校验固定安全规则。
-5. 加载当前已发布知识索引；失败时启用 BM25/无知识降级。
-6. 启动 API。
-7. 启动任务 dispatcher 和 worker。
-8. readiness 通过后接收流量。
+1. 根据选择的配置准备数据库；使用 `.env.example` 时先启动 MySQL/Redis，使用代码默认值时可直接使用 SQLite/Mock。
+2. 启动 FastAPI；lifespan 执行两段兼容迁移、`Base.metadata.create_all()`、演示账号 Seed 和交接摘要回填。
+3. 启动进程内 Tool Dispatcher，并恢复遗留 `RUNNING` 任务。
+4. RAG 在首次 `status()`、`retrieve()` 或 `rebuild()` 时懒加载。
+5. `/health/ready` 当前返回声明性状态，不主动探测数据库、Redis、模型或 RAG。
 
 ### 18.3 Uvicorn worker 约束
 
-如果每个 Web 进程都启动后台线程，会造成重复领取和 Excel 并发写入。可选方案：
+如果每个 Web 进程都启动后台线程，会增加任务重复领取、进程内限流不一致等风险。可选方案：
 
 - MVP 单应用进程，通过数据库锁保证任务唯一领取。
 - 部署时设置单独的 `worker` 启动模式，Web 进程不执行后台任务。
@@ -1442,8 +1440,8 @@ Chroma 首版可嵌入应用并挂载持久卷；需要水平扩容时改为独�
 任务：
 
 - 建立数据库任务表、worker、锁、重试、依赖和死信。
-- 实现 Excel 派生台账和原子写入。
-- 实现中高风险个案创建和事件状态机。
+- 实现报告详细数据与台账登记标记的事务写入，以及管理员按需 Excel 导出。
+- 实现仅 `RISK` 的个案创建和事件状态机。
 - 实现日志/SMTP 预警、频率限制和最小信息模板。
 - 实现异常任务列表和人工重新投递。
 - 测试服务重启恢复和全链路幂等。
@@ -1489,7 +1487,7 @@ Chroma 首版可嵌入应用并挂载持久卷；需要水平扩容时改为独�
 
 完成标准：
 
-- 无默认账号、Basic Auth、任意 CORS 或明文敏感配置。
+- 无公开默认凭证、过宽 CORS 或明文敏感配置；补齐正式身份与密钥管理。
 - 高风险预警和人工接手演练通过。
 - 所有上线审批有记录，回滚流程可执行。
 
@@ -1560,7 +1558,7 @@ MVP 只有同时满足以下条件才算完成：
 2. 普通交流不被不必要地心理化，也不生成后台心理记录。
 3. 心理支持回复符合“具体回应 + 少量步骤 + 必要现实支持”结构。
 4. 明确高风险表达由固定规则识别，并得到经审核的安全优先回复。
-5. 心理支持/风险消息生成内部报告；中高风险建案；高风险预警。
+5. `CONSULT/RISK` 消息生成内部报告和台账；只有 `RISK` 自动建案并触发预警。
 6. 后台动作失败不阻断学生回复，且可重试、可追踪、可进入死信。
 7. 学生无法查看报告、风险级别、其他学生数据或管理功能。
 8. 管理员关键敏感操作可审计。
@@ -1580,11 +1578,10 @@ MVP 只有同时满足以下条件才算完成：
 | 异步任务丢失 | 报告未跟进或预警缺失 | 数据库任务表、事务投递、重启恢复、死信告警 |
 | 重试导致重复预警 | 干扰工作人员 | 唯一幂等键、发送记录、频率策略 |
 | Redis/向量库成为单点 | 对话不可用 | MySQL/BM25/无知识降级 |
-| 多 worker 破坏 Excel | 台账损坏 | 数据库锁、串行 handler、原子替换、可重建 |
 | 敏感信息进入日志/模型 | 隐私与合规风险 | 输入脱敏、加密、日志红线、访问审计 |
 | 管理员权限使用不当 | 越权访问学生信息 | 管理端功能权限、资源级授权、审计和定期复核 |
 | 安全规则未经专业审核 | 错误处置 | 版本化审批、灰度、定期复审和回滚 |
-| Basic Auth 被带入生产 | 账号安全风险 | 环境门禁、启动检查、SSO/MFA 上线项 |
+| 演示账号或当前自定义 Bearer Token 被直接带入生产 | 账号安全风险 | 环境门禁、撤销/刷新设计、SSO/MFA 上线项 |
 
 ---
 
@@ -1598,25 +1595,18 @@ MVP 只有同时满足以下条件才算完成：
 4. 加入固定高风险规则和经审核的静态安全回复。
 5. 接入真实模型 Provider 和结构化智能体输出。
 6. 加入安全审查、报告事务和后台任务表。
-7. 跑通中风险建案和高风险日志预警。
-8. 在已完成 Redis 分层记忆和 Excel 闭环的基础上，再加入完整 RAG、SMTP 和生产级管理能力。
+7. 跑通 `CONSULT` 台账，以及 `RISK` 建案和日志预警。
+8. 在已完成 Redis 分层记忆和 SQL 台账闭环的基础上，再加入完整 RAG、SMTP 和生产级管理能力。
 
 这样每一步都能运行和验收，同时把高风险安全闭环放在知识库和界面完善之前完成。
 
 ---
 
-## 24. 最终交付物
+## 24. 交付物现状
 
-- 可运行的 FastAPI 应用及原生 Web 学生端、管理端。
-- MySQL 迁移脚本和数据字典。
-- Redis、Chroma、模型、SMTP 和 worker 配置说明。
-- MySQL/Redis Docker Compose 和环境变量模板；Python 后端本地运行说明。
-- 固定安全规则、心理支持 Skills、Prompt 及其版本记录。
-- 已审核校园知识源和索引构建脚本。
-- 单元、集成、安全、权限、E2E 和 RAG 评测。
-- 运维手册、告警处理、备份恢复和回滚手册。
-- 数据生命周期、权限矩阵和审计说明。
-- 心理、法律、伦理和信息安全评审记录。
+当前仓库已经包含：可运行的 FastAPI 与原生学生/管理页面、SQLite/MySQL SQLAlchemy 模型、MySQL/Redis Compose 与环境变量示例、Redis/Chroma/模型/SMTP/进程内 Worker 配置、固定安全规则、心理 Skills、本地 Markdown 知识、pytest、Engineering Harness、RAG 评测和模块文档。
+
+以下仍是正式交付前的目标项，不在当前仓库中：Alembic/生产迁移体系、独立 Worker 部署、完整 E2E 与真实基础设施验证、知识审核发布/快照、运维与备份恢复手册、数据生命周期与细粒度权限制度，以及心理、法律、伦理和信息安全评审记录。
 
 ---
 

@@ -1414,6 +1414,388 @@ th {
   background: var(--green-soft);
 }
 
+.operation-health-banner {
+  display: flex;
+  align-items: center;
+  min-height: 5.5rem;
+  border: 1px solid #c9ddd5;
+  border-radius: 1rem;
+  padding: 1.15rem 1.3rem;
+  color: var(--green-dark);
+  background: var(--green-soft);
+}
+
+.operation-health-banner.has-issues {
+  border-color: #ecc7c3;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.operation-health-banner strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.operation-health-banner p {
+  margin: 0.32rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.operation-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin: 0.9rem 0 1rem;
+}
+
+.operation-summary-card {
+  display: grid;
+  gap: 0.42rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  color: var(--ink);
+  background: white;
+  text-align: left;
+}
+
+.operation-summary-card:hover {
+  border-color: #b9d2c9;
+  background: rgba(220, 236, 230, 0.2);
+}
+
+.operation-summary-card > span,
+.operation-summary-card small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.operation-summary-card strong {
+  font-size: 1.08rem;
+}
+
+.operation-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.operation-overview-section {
+  min-height: 20rem;
+}
+
+.operation-activity-list {
+  display: grid;
+}
+
+.operation-activity-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 0.95rem 1.2rem;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.operation-activity-item:hover {
+  background: rgba(220, 236, 230, 0.2);
+}
+
+.operation-activity-item.tone-danger {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.operation-activity-item.tone-warning {
+  box-shadow: inset 3px 0 0 #bf8238;
+}
+
+.operation-activity-item.tone-success {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.operation-activity-copy {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.operation-activity-copy small,
+.operation-activity-item time {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.operation-activity-item time {
+  white-space: nowrap;
+}
+
+.panel-description {
+  max-width: 38rem;
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.status-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.status-filter {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.48rem 0.75rem;
+  color: var(--muted);
+  background: white;
+  font-size: 0.74rem;
+}
+
+.status-filter.active {
+  border-color: #b9d2c9;
+  color: var(--green-dark);
+  background: var(--green-soft);
+  font-weight: 700;
+}
+
+.job-group-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  padding: 0 1.2rem 1.2rem;
+}
+
+.job-group-card {
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  background: white;
+}
+
+.job-group-card.failed {
+  border-color: #ecc7c3;
+}
+
+.job-group-header,
+.job-group-actions,
+.skill-status-head,
+.operation-run-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.job-group-header > div {
+  min-width: 0;
+}
+
+.job-group-header p {
+  overflow-wrap: anywhere;
+  margin: 0.32rem 0 0;
+  font-size: 0.7rem;
+}
+
+.job-step-list {
+  display: grid;
+  gap: 0;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.55rem minmax(0, 1fr);
+  gap: 0.62rem;
+  min-height: 2.6rem;
+}
+
+.job-step:not(:last-child)::after {
+  position: absolute;
+  top: 1.45rem;
+  bottom: -0.15rem;
+  left: 0.72rem;
+  width: 2px;
+  background: var(--line);
+  content: "";
+}
+
+.job-step-marker {
+  z-index: 1;
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--green-dark);
+  background: var(--green-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.job-step-dead .job-step-marker {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.job-step-copy {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.job-step-copy small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.job-group-error {
+  margin: 0 0 0.85rem;
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.job-group-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+}
+
+.operation-run-list {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0 1.2rem 1.2rem;
+}
+
+.operation-run-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  padding: 0.9rem 1rem;
+  background: white;
+}
+
+.operation-run-heading {
+  justify-content: flex-start;
+}
+
+.operation-run-main p {
+  margin: 0.38rem 0 0;
+  font-size: 0.72rem;
+}
+
+.operation-run-result {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.operation-run-result strong {
+  font-size: 0.78rem;
+}
+
+.skill-summary {
+  margin: 0 1.2rem 1rem;
+  border-radius: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  color: var(--green-dark);
+  background: var(--green-soft);
+  font-size: 0.78rem;
+}
+
+.skill-summary.has-issues {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.skill-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  padding: 0 1.2rem 1.2rem;
+}
+
+.skill-status-card {
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  padding: 1rem;
+  background: white;
+}
+
+.skill-status-card p {
+  margin: 0.55rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.skill-description {
+  color: var(--muted);
+}
+
+.skill-valid {
+  color: var(--green-dark);
+}
+
+.skill-issue {
+  color: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .operation-summary-grid,
+  .operation-overview-grid,
+  .job-group-list,
+  .skill-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .operation-tabs {
+    display: flex;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  .operation-tab {
+    flex: 0 0 auto;
+  }
+
+  .operation-run-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .operation-run-result {
+    justify-items: start;
+    grid-column: 1;
+  }
+
+  .operation-run-card > .small-btn {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .job-group-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .detail-drawer {
   position: fixed;
   z-index: 80;
@@ -1847,10 +2229,456 @@ body.conversation-open {
   }
 }
 
+.nav-label-secondary {
+  margin-top: 1.45rem;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}
+
+.nav-icon {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(202, 217, 210, 0.9);
+  border-radius: 0.55rem;
+  color: #60736c;
+  background: rgba(255, 255, 255, 0.68);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.admin-nav a.active .nav-icon {
+  border-color: #b9d2c9;
+  color: var(--green-dark);
+  background: white;
+}
+
+.admin-header {
+  align-items: center;
+  margin-bottom: 1.15rem;
+}
+
+.admin-page-heading h1 {
+  font-family: inherit;
+  font-size: clamp(1.75rem, 2.5vw, 2.25rem);
+  font-weight: 760;
+  letter-spacing: -0.035em;
+}
+
+.admin-page-heading > p:last-child {
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.admin-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.last-updated {
+  color: var(--muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.4rem;
+}
+
+.refresh-btn.is-loading .refresh-icon {
+  animation: admin-spin 850ms linear infinite;
+}
+
+@keyframes admin-spin {
+  to { transform: rotate(360deg); }
+}
+
+.metric-card,
+.admin-page .panel {
+  border: 1px solid rgba(218, 228, 222, 0.92);
+  box-shadow: 0 8px 24px rgba(35, 65, 55, 0.055);
+}
+
+.metric-priority {
+  border-color: rgba(190, 211, 202, 0.95);
+}
+
+.metric-label,
+.panel-description,
+.operation-summary-card > span,
+.operation-summary-card small,
+.operation-activity-copy small,
+.operation-activity-item time,
+.job-group-header p,
+.job-step-copy small,
+.job-group-error,
+.operation-run-main p,
+.skill-status-card p,
+.pagination-summary,
+.page-status {
+  font-size: 0.78rem;
+}
+
+.panel-kicker,
+.compact-field,
+.record-meta-item small {
+  font-size: 0.73rem;
+}
+
+.page-panel {
+  min-height: 22rem;
+}
+
+.list-filter-actions {
+  flex: 1;
+}
+
+.search-field {
+  min-width: min(16rem, 100%);
+}
+
+.case-status-field {
+  min-width: min(31rem, 100%);
+}
+
+.case-status-filters {
+  justify-content: flex-start;
+}
+
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 1.2rem;
+  border-top: 1px solid var(--line);
+  padding: 0.8rem 0;
+}
+
+.filter-summary {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.compact-ghost-btn {
+  width: auto;
+  min-height: 2.35rem;
+  padding: 0.58rem 0.75rem;
+}
+
+.record-list {
+  display: grid;
+  gap: 0.72rem;
+  padding: 0 1.2rem 1.2rem;
+}
+
+.record-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(10rem, auto) auto;
+  align-items: center;
+  gap: 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  padding: 1rem 1.05rem;
+  background: #fff;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.record-card:hover {
+  border-color: #bfd4cb;
+  background: #fcfdfc;
+  transform: translateY(-1px);
+}
+
+.record-card.is-priority,
+.record-card.needs-owner {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.record-main {
+  min-width: 0;
+}
+
+.record-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.record-title {
+  font-size: 0.95rem;
+}
+
+.record-summary {
+  margin: 0.55rem 0 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.55;
+}
+
+.record-description {
+  margin: 0.28rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.record-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+}
+
+.record-meta-item {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 7rem;
+}
+
+.record-meta-item small {
+  color: var(--muted);
+}
+
+.record-meta-item strong {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 12rem;
+}
+
+.record-actions .small-btn {
+  margin: 0;
+}
+
+.attention-chip {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.alert-record {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.channel-mark {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  border-radius: 0.72rem;
+  color: var(--green-dark);
+  background: var(--green-soft);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.channel-email,
+.channel-smtp {
+  color: #6b4d1f;
+  background: #f7ead3;
+}
+
+.job-filter-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.operation-health-banner.has-warnings {
+  border-color: #ead5b5;
+  color: #825319;
+  background: #fff7e9;
+}
+
+.admin-page .table-wrap {
+  border-top: 1px solid var(--line);
+}
+
+.admin-page .table-wrap th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f7f9f7;
+}
+
+.admin-page .table-wrap tbody tr:hover {
+  background: rgba(220, 236, 230, 0.17);
+}
+
+.registration-dialog {
+  width: min(38rem, calc(100vw - 2rem));
+}
+
+.dialog-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 1rem;
+}
+
+.empty-state {
+  display: grid;
+  min-height: 10rem;
+  place-items: center;
+  border: 1px dashed #cedbd5;
+  border-radius: 0.85rem;
+  padding: 1.5rem;
+  color: var(--muted);
+  background: rgba(248, 251, 249, 0.72);
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.small-btn:focus-visible,
+.primary-btn:focus-visible,
+.ghost-btn:focus-visible,
+.status-filter:focus-visible,
+.operation-tab:focus-visible,
+.operation-summary-card:focus-visible,
+.operation-activity-item:focus-visible,
+.record-card button:focus-visible,
+.compact-field input:focus-visible,
+.compact-field select:focus-visible {
+  outline: 3px solid rgba(47, 111, 94, 0.2);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1100px) {
+  .record-card,
+  .alert-record {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .record-meta {
+    justify-content: flex-start;
+    grid-column: 1;
+  }
+
+  .record-card > .small-btn,
+  .record-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .alert-record {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .alert-record .channel-mark {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .alert-record .record-main {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .alert-record .record-meta {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .admin-header .refresh-btn {
+    width: auto;
+  }
+
+  .filter-header,
+  .list-filter-actions,
+  .job-filter-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filter-actions,
+  .list-filter-actions,
+  .compact-field,
+  .search-field,
+  .job-filter-controls {
+    width: 100%;
+  }
+
+  .case-status-filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+  }
+
+  .record-card,
+  .alert-record {
+    grid-template-columns: 1fr;
+    gap: 0.8rem;
+  }
+
+  .record-meta,
+  .record-card > .small-btn,
+  .record-actions,
+  .alert-record .channel-mark,
+  .alert-record .record-main {
+    width: 100%;
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .record-actions {
+    min-width: 0;
+    justify-content: stretch;
+  }
+
+  .record-actions > .small-btn,
+  .record-actions > .action-menu,
+  .record-actions > .action-menu > summary {
+    flex: 1;
+  }
+
+  .dialog-field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
+    animation: none !important;
     scroll-behavior: auto !important;
     transition: none !important;
   }

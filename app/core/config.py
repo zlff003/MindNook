@@ -56,14 +56,11 @@ class Settings(BaseSettings):
     model_safety_name: str = ""
     model_response_name: str = ""
 
-    excel_ledger_path: str = "data/exports/mindnook-risk-ledger.xlsx"
-
     tool_worker_poll_seconds: float = 1.0
     tool_worker_batch_size: int = 20
     tool_worker_max_attempts: int = 3
     tool_worker_retry_base_seconds: float = 2.0
     tool_worker_running_timeout_seconds: int = 300
-    tool_worker_excel_workers: int = 1
     tool_worker_case_workers: int = 2
     tool_worker_alert_workers: int = 2
     alert_rate_limit_per_minute: int = 10
@@ -75,6 +72,7 @@ class Settings(BaseSettings):
     smtp_from_address: str = ""
     alert_email_to: str = ""
     smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
     demo_student_username: str = "student"
     demo_student_password: str = "student123"

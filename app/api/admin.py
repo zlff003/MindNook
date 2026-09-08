@@ -22,7 +22,9 @@ from app.models import (
     Message,
     PsychologicalReport,
     RiskCase,
+    ToolJob,
     User,
+    utc_now,
 )
 from app.schemas import (
     AccountRegistrationRequest,
@@ -59,6 +61,7 @@ AUDIT_ACTION_LABELS = {
     "agent_trace_viewed": "查看 Agent 执行步骤",
     "agent_collaboration_viewed": "查看 Agent 协作事件",
     "agent_audit_memory_viewed": "查看 Agent 审计轨迹",
+    "job_group_retried": "重新执行失败流程",
 }
 
 AUDIT_RESOURCE_LABELS = {
@@ -67,6 +70,7 @@ AUDIT_RESOURCE_LABELS = {
     "case": "风险个案",
     "audit_log": "审计日志",
     "agent_run": "Agent 运行",
+    "job_group": "后台处理流程",
     "reports": "报告导出",
     "cases": "个案导出",
     "audit-logs": "审计日志导出",
@@ -83,6 +87,8 @@ AUDIT_DETAIL_KEY_LABELS = {
     "status": "个案状态",
     "actor": "操作人工号",
     "sensitive_raw_text": "包含学生敏感原文",
+    "retried_jobs": "重新执行任务数",
+    "types": "任务类型",
 }
 
 AUDIT_VALUE_LABELS = {
@@ -102,6 +108,8 @@ AUDIT_VALUE_LABELS = {
     "active": "有效",
     "inactive": "停用",
     "disabled": "已停用",
+    "CASE_CREATE": "创建风险个案",
+    "ALERT_SEND": "发送风险预警",
 }
 
 
@@ -356,9 +364,12 @@ def dashboard_summary(
         )
         or 0,
         "failed_jobs": db.scalar(
-            select(func.count())
+            select(func.count(func.distinct(BackgroundJob.report_id)))
             .select_from(BackgroundJob)
-            .where(BackgroundJob.status == "DEAD")
+            .where(
+                BackgroundJob.status == "DEAD",
+                BackgroundJob.report_id.is_not(None),
+            )
         )
         or 0,
     }
@@ -901,6 +912,128 @@ def list_jobs(
         }
         for item in jobs
     ]
+
+
+@router.get("/job-groups")
+def list_job_groups(
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Return only completed report workflows, grouped by psychological report."""
+    del admin
+    rows = db.execute(
+        select(ToolJob, PsychologicalReport)
+        .join(PsychologicalReport, PsychologicalReport.id == ToolJob.report_id)
+        .order_by(ToolJob.report_id.desc(), ToolJob.priority.desc(), ToolJob.id.asc())
+    ).all()
+    grouped: dict[int, dict] = {}
+    for job, report in rows:
+        group = grouped.setdefault(
+            report.id,
+            {
+                "id": report.public_id,
+                "report_id": report.public_id,
+                "risk_level": report.risk_level,
+                "jobs": [],
+            },
+        )
+        group["jobs"].append(job)
+
+    output = []
+    for group in grouped.values():
+        jobs = group.pop("jobs")
+        if any(job.status in {"PENDING", "RUNNING"} for job in jobs):
+            continue
+        if not jobs or any(job.status not in {"SUCCESS", "DEAD"} for job in jobs):
+            continue
+        failed_jobs = [job for job in jobs if job.status == "DEAD"]
+        output.append(
+            {
+                **group,
+                "status": "DEAD" if failed_jobs else "SUCCESS",
+                "created_at": min(job.created_at for job in jobs),
+                "finished_at": max(job.updated_at for job in jobs),
+                "attempt_count": sum(job.attempt_count for job in jobs),
+                "last_error": failed_jobs[-1].last_error if failed_jobs else None,
+                "steps": [
+                    {
+                        "id": job.public_id,
+                        "job_type": job.job_type,
+                        "status": job.status,
+                        "attempt_count": job.attempt_count,
+                        "max_attempts": job.max_attempts,
+                        "last_error": job.last_error,
+                        "created_at": job.created_at,
+                        "finished_at": job.updated_at,
+                    }
+                    for job in jobs
+                ],
+            }
+        )
+    return sorted(output, key=lambda item: item["finished_at"], reverse=True)
+
+
+@router.post("/job-groups/{report_id}/retry")
+def retry_job_group(
+    report_id: str,
+    request: Request,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Retry only failed jobs in one report workflow, preserving successful work."""
+    report = db.scalar(
+        select(PsychologicalReport).where(PsychologicalReport.public_id == report_id)
+    )
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="处理流程不存在。")
+    jobs = list(
+        db.scalars(
+            select(ToolJob)
+            .where(ToolJob.report_id == report.id)
+            .order_by(ToolJob.priority.desc(), ToolJob.id.asc())
+            .with_for_update()
+        )
+    )
+    if not jobs:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="处理流程不存在。")
+    if any(job.status in {"PENDING", "RUNNING"} for job in jobs):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该流程仍在处理中，不能重复提交。",
+        )
+    failed_jobs = [job for job in jobs if job.status == "DEAD"]
+    if not failed_jobs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该流程没有需要重新执行的失败步骤。",
+        )
+
+    now = utc_now()
+    for job in failed_jobs:
+        job.status = "PENDING"
+        job.attempt_count = 0
+        job.run_after = now
+        job.locked_by = None
+        job.locked_at = None
+        job.last_error = None
+        job.updated_at = now
+    retried_job_ids = [job.public_id for job in failed_jobs]
+    retried_types = "、".join(_audit_value_label(job.job_type) for job in failed_jobs)
+    _audit(
+        db,
+        admin,
+        "job_group_retried",
+        "job_group",
+        report.public_id,
+        detail=f"retried_jobs={len(failed_jobs)};types={retried_types}",
+    )
+    db.commit()
+    request.app.state.tool_dispatcher.dispatch()
+    return {
+        "id": report.public_id,
+        "status": "PENDING",
+        "retried_jobs": retried_job_ids,
+    }
 
 
 @router.get("/agent-runs")

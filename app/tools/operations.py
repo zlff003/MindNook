@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import os
 import smtplib
-import tempfile
-import threading
 from email.message import EmailMessage
-from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 
 from app.core.config import Settings
@@ -16,54 +11,11 @@ from app.models import (
     AlertEvent,
     AuditLog,
     CaseEvent,
-    LedgerEntry,
     PsychologicalReport,
     RiskCase,
     User,
     utc_now,
 )
-
-
-LEDGER_HEADERS = (
-    "report_id",
-    "student_id",
-    "created_at",
-    "risk_level",
-    "confidence",
-    "emotion_summary",
-    "reason_summary",
-)
-LEGACY_LEDGER_HEADERS = (
-    "report_id",
-    "student_id",
-    "created_at",
-    "dialogue_type",
-    "risk_level",
-    "confidence",
-    "emotion_summary",
-    "reason_summary",
-)
-_EXCEL_WRITE_LOCK = threading.Lock()
-
-
-def _normalized_ledger_risk_level(value, dialogue_type=None) -> str:
-    normalized = str(value or "").upper()
-    route = str(dialogue_type or "").lower()
-    if normalized in {"HIGH", "RISK"} or route == "safety_risk":
-        return "RISK"
-    if normalized in {"LOW", "MEDIUM", "CONSULT"} or route == "psychological_support":
-        return "CONSULT"
-    return "CHAT"
-
-
-def _migrate_legacy_ledger(sheet) -> None:
-    """Upgrade the pre-three-level ledger layout in place."""
-    for row in sheet.iter_rows(min_row=2):
-        row[4].value = _normalized_ledger_risk_level(
-            row[4].value,
-            row[3].value,
-        )
-    sheet.delete_cols(4, 1)
 
 
 class ToolOperations:
@@ -99,86 +51,6 @@ class ToolOperations:
         if not alert:
             raise LookupError(f"alert not found: {alert_id}")
         return alert
-
-    def _write_excel(self, db, report: PsychologicalReport) -> None:
-        path = Path(self.settings.excel_ledger_path).resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        student = db.get(User, report.student_id)
-        student_public_id = student.public_id if student else "unknown"
-
-        with _EXCEL_WRITE_LOCK:
-            if path.exists():
-                workbook = load_workbook(path)
-                sheet = workbook.active
-                current_headers = tuple(cell.value for cell in sheet[1])
-                if current_headers == LEGACY_LEDGER_HEADERS:
-                    _migrate_legacy_ledger(sheet)
-                    current_headers = tuple(cell.value for cell in sheet[1])
-                if current_headers != LEDGER_HEADERS:
-                    workbook.close()
-                    raise RuntimeError("Excel ledger header version is incompatible")
-            else:
-                workbook = Workbook()
-                sheet = workbook.active
-                sheet.title = "心理风险台账"
-                sheet.append(LEDGER_HEADERS)
-                sheet.freeze_panes = "A2"
-
-            existing_report_ids = {
-                str(cell.value) for cell in sheet["A"][1:] if cell.value is not None
-            }
-            if report.public_id not in existing_report_ids:
-                sheet.append(
-                    (
-                        report.public_id,
-                        student_public_id,
-                        report.created_at.isoformat(),
-                        report.risk_level,
-                        report.confidence,
-                        report.emotion_summary,
-                        report.reason_summary,
-                    )
-                )
-
-            temporary_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    prefix="mindnook-ledger-",
-                    suffix=".xlsx",
-                    dir=path.parent,
-                    delete=False,
-                ) as temporary_file:
-                    temporary_path = Path(temporary_file.name)
-                workbook.save(temporary_path)
-                workbook.close()
-                os.replace(temporary_path, path)
-            finally:
-                workbook.close()
-                if temporary_path and temporary_path.exists():
-                    temporary_path.unlink()
-
-    def excel_report(self, report_public_id: str) -> dict:
-        db = self.session_factory()
-        try:
-            report = self._report(db, report_public_id)
-            existing = db.scalar(
-                select(LedgerEntry).where(LedgerEntry.report_id == report.id)
-            )
-            if not existing:
-                db.add(LedgerEntry(report_id=report.id))
-            self._write_excel(db, report)
-            db.commit()
-            return {
-                "ok": True,
-                "report_id": report.public_id,
-                "ledger_path": str(Path(self.settings.excel_ledger_path).resolve()),
-                "idempotent": existing is not None,
-            }
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
 
     def case_create(self, report_public_id: str) -> dict:
         db = self.session_factory()
@@ -246,12 +118,15 @@ class ToolOperations:
             f"摘要：{report.emotion_summary}\n"
             "请登录管理后台查看，并按学校正式流程跟进。"
         )
-        with smtplib.SMTP(
+        smtp_client = (
+            smtplib.SMTP_SSL if self.settings.smtp_use_ssl else smtplib.SMTP
+        )
+        with smtp_client(
             self.settings.smtp_host,
             self.settings.smtp_port,
             timeout=10,
         ) as client:
-            if self.settings.smtp_use_tls:
+            if self.settings.smtp_use_tls and not self.settings.smtp_use_ssl:
                 client.starttls()
             if self.settings.smtp_username:
                 client.login(

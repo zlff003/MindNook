@@ -1,7 +1,7 @@
 # MindNook 上下文与分层记忆模块
 
-> 文档版本：2.0  
-> 更新日期：2026-08-08  
+> 文档版本：2.1
+> 更新日期：2026-08-24
 > 实现目录：`app/memory/`、`app/agents/runtime.py`、`app/harness/agent_harness.py`
 
 ## 1. 模块目标
@@ -10,7 +10,7 @@
 
 核心目标包括：
 
-- 短期上下文优先从 Redis 读取，缺失或不可用时由 MySQL 回填。
+- 短期上下文优先从 Redis 读取，缺失或不可用时由当前 SQLAlchemy 业务数据库回填（默认 SQLite，可配置为 MySQL）。
 - 完整聊天记录长期保存在业务数据库，不依赖 Redis 作为事实数据源。
 - 对长历史执行窗口裁剪和确定性摘要压缩，避免 Prompt 随对话轮次无限增长。
 - 保留最近对话的脱敏原文，避免摘要丢失语气、时间、犹豫、求助方式和风险强度。
@@ -26,8 +26,8 @@ flowchart TD
     Input[当前用户输入] --> Redact[PII 脱敏]
     Harness[AgentHarness] --> Redis{Redis 短期记忆命中?}
     Redis -->|是| Window[最近最多 40 条脱敏消息]
-    Redis -->|否或不可用| MySQL[(MySQL chat_messages)]
-    MySQL --> Backfill[查询最近 40 条并回填 Redis]
+    Redis -->|否或不可用| DB[(业务数据库 chat_messages)]
+    DB --> Backfill[查询最近 40 条并回填 Redis]
     Backfill --> Window
     Window --> Compress[ContextCompressor]
     Redact --> Compress
@@ -78,7 +78,7 @@ Redis 使用 List 保存消息。每次写入执行 `RPUSH + LTRIM + EXPIRE`，�
 
 ### 3.2 业务数据库完整记录
 
-学生和助手消息均写入 MySQL `chat_messages` 表。数据库保存完整业务记录，是事实数据源；Redis 只是最近消息的热缓存。
+学生和助手消息均写入当前 SQLAlchemy 业务数据库的 `chat_messages` 表；默认配置使用 SQLite，`.env.example` 使用 MySQL。业务数据库保存完整记录，是事实数据源；Redis 只是最近消息的热缓存。
 
 加载流程：
 
@@ -89,6 +89,7 @@ Redis 使用 List 保存消息。每次写入执行 `RPUSH + LTRIM + EXPIRE`，�
 5. Redis 故障不会阻断聊天，本轮继续使用数据库结果。
 
 数据库中的完整记录不会因此被删除；但模型本轮可见的会话记忆仍以最近 40 条为上限。
+> 实现说明：`ShortTermMemoryService.load()` 的 `MemoryContext.source` 在数据库回填路径上仍返回历史兼容值 `"mysql"`，即使当前 `DATABASE_URL` 指向 SQLite；该字段表示“数据库回填”，不能据此判断实际数据库方言。
 
 ### 3.3 内部摘要记忆
 
@@ -168,7 +169,7 @@ Redis 反序列化和 `ContextCompressor` 内部也会再次脱敏，避免旧�
 ### 4.2 历史窗口裁剪
 
 ```text
-会话完整历史：MySQL 持久化
+会话完整历史：业务数据库持久化
 本轮可加载历史：最近最多 40 条
 模型最近原文：最近最多 8 条
 旧历史：最近 40 条中位于原文窗口之前的部分
@@ -254,7 +255,7 @@ UnderstandingAgent、SafetyAgent 和 ResponseAgent 均使用该角色化历史�
 
 1. 解析学生和会话。
 2. 对当前输入执行 PII 脱敏。
-3. 从 Redis 或 MySQL 加载最近历史并构造 `MemoryContext`。
+3. 从 Redis 或业务数据库加载最近历史并构造 `MemoryContext`。
 4. 加载各 Agent 的隔离私有记忆。
 5. 将当前学生消息以 `generating` 状态写入数据库，再启动 Runtime。
 6. Runtime 完成意图识别、安全评估、上下文检索、回复生成和安全审查。
@@ -303,7 +304,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 | 故障场景 | 系统行为 |
 |---|---|
-| Redis Key 不存在 | 从 MySQL 加载最近 40 条并回填 |
+| Redis Key 不存在 | 从业务数据库加载最近 40 条并回填 |
 | Redis 内容损坏 | 删除损坏 Key，回退数据库 |
 | Redis 连接失败 | 直接使用数据库结果，本轮继续 |
 | 数据库没有历史 | 使用空历史和当前输入继续 |
@@ -313,7 +314,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 ## 11. 当前边界
 
-- MySQL 保存完整聊天记录，但本轮上下文加载和摘要只覆盖最近 40 条；更早消息不会进入 `memoryBrief`。
+- 业务数据库保存完整聊天记录，但本轮上下文加载和摘要只覆盖最近 40 条；更早消息不会进入 `memoryBrief`。
 - 当前摘要是确定性摘录，不是实体记忆、用户画像或长期滚动语义摘要。
 - `modelHistory` 和 `memoryBrief` 使用字符预算，不是模型 Tokenizer 的精确 Token 预算。
 - ContextAgent 会保存隔离的检索策略记录；当前确定性检索流程不会把其他 Agent 的私有状态用于检索。
@@ -325,7 +326,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 |---|---|
 | 配置默认值 | `app/core/config.py` |
 | MemoryContext 和 MemoryMessage | `app/memory/types.py` |
-| Redis/MySQL 加载与上下文压缩 | `app/memory/service.py` |
+| Redis/业务数据库加载与上下文压缩 | `app/memory/service.py` |
 | Redis Store 和故障熔断 | `app/memory/store.py` |
 | Agent 私有记忆 | `app/memory/private.py` |
 | Trace 审计记忆 | `app/memory/trace.py` |
@@ -338,7 +339,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 上下文模块的自动化测试至少覆盖：
 
-- Redis Miss 后从数据库回填最近 40 条。
+- Redis Miss 后从业务数据库回填最近 40 条。
 - 第二次读取命中 Redis，并刷新 TTL。
 - Redis 写入裁剪到 40 条。
 - Redis 故障时数据库降级。

@@ -38,18 +38,18 @@ async def run_report_tools(
     normalized_risk = risk_level.strip().upper()
     if normalized_risk not in {"CHAT", "CONSULT", "RISK"}:
         raise ValueError("risk_level must be CHAT, CONSULT, or RISK")
+    if normalized_risk != "RISK":
+        return []
     server = StdioServerParameters(
         command=sys.executable,
         args=["-m", "app.mcp.server"],
         cwd=PROJECT_ROOT,
         env=env or dict(os.environ),
     )
-    calls = []
-    if normalized_risk in {"CONSULT", "RISK"}:
-        calls.append(("mindbridge_excel_report", {"report_id": report_id}))
-    if normalized_risk == "RISK":
-        calls.append(("mindbridge_case_create", {"report_id": report_id}))
-        calls.append(("mindbridge_alert_send", {"report_id": report_id}))
+    calls = [
+        ("mindbridge_case_create", {"report_id": report_id}),
+        ("mindbridge_alert_send", {"report_id": report_id}),
+    ]
 
     outputs: list[dict[str, Any]] = []
     async with stdio_client(server) as (read_stream, write_stream):

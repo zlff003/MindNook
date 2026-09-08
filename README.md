@@ -37,7 +37,7 @@ MindNook 是一个前后端一体的校园心理关怀 Web 应用。学生可以
 | 🧩 场景 Skills | 7 个内置心理支持 Skill，支持启动校验、按主题加载、安全降级和管理员状态查看 |
 | 🗂️ 管理闭环 | 报告、个案分配、状态流转、跟进记录、邮件/日志预警、Excel 导出与用户管理 |
 | 🔐 隐私与审计 | PII 入模前脱敏、角色权限隔离、敏感原文访问与导出审计、完整 Agent Trace |
-| ⚙️ 工具治理 | 持久化任务 DAG、幂等、重试、限流、死信记录，以及 6 个 FastMCP stdio 工具 |
+| ⚙️ 工具治理 | 持久化任务 DAG、幂等、重试、限流、死信记录，以及 5 个 FastMCP stdio 工具 |
 
 ## 🧭 系统架构
 
@@ -58,7 +58,6 @@ flowchart LR
     Harness --> Memory[(Redis<br/>短期与私有记忆)]
     Harness --> Queue[异步工具队列]
 
-    Queue --> Excel[Excel 台账]
     Queue --> Cases[风险个案]
     Queue --> Alerts[邮件 / 日志预警]
 ```
@@ -193,7 +192,6 @@ MODEL_NAME=qwen-plus
 | `AGENT_MAX_ROUNDS` | `16` | 单轮最大协作轮数 |
 | `RAG_KNOWLEDGE_DIR` | `data/knowledge` | Markdown 知识目录 |
 | `RAG_CHROMA_PATH` | `data/chroma` | Chroma 持久化目录 |
-| `EXCEL_LEDGER_PATH` | `data/exports/mindnook-risk-ledger.xlsx` | 风险台账输出路径 |
 | `SMTP_HOST` | 空 | 留空时使用本地日志预警 |
 
 全部配置及说明见 [.env.example](.env.example)。
@@ -216,7 +214,7 @@ python -m app.harness.runner --json
 python -m app.harness.runner --suite risk-safety --suite tool-queue
 ```
 
-Harness 使用临时 SQLite、内存短期记忆、确定性 Mock 模型、临时 RAG 索引和临时 Excel 文件，不会读写已配置的业务数据库、Redis 或风险台账。
+Harness 使用临时 SQLite、内存短期记忆、确定性 Mock 模型和临时 RAG 索引，不会读写已配置的业务数据库、Redis 或业务索引。
 
 运行 108 条中文样例的 RAG 回归评测：
 
@@ -261,7 +259,7 @@ python -m app.mcp.server
 python -m app.mcp.client <report_public_id> --risk RISK
 ```
 
-MCP 与后台队列复用同一业务层，覆盖 Excel 台账、个案创建、预警发送与确认、个案备注等操作。
+MCP 与后台队列复用同一业务层，覆盖个案创建、预警发送与确认、个案备注等操作。台账数据直接存储在 SQL 中，管理员导出时按需生成 Excel。
 
 ## 🔐 安全与隐私边界
 

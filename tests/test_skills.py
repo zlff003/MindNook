@@ -70,7 +70,7 @@ class SkillRegistryTests(unittest.TestCase):
 class SkillApiTests(unittest.TestCase):
     def test_admin_can_view_skill_status_and_report_handoff(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
-            settings = Settings(app_env="test", app_secret="skill-test-secret", database_url=f"sqlite:///{(Path(temporary_dir) / 'skills.db').as_posix()}", model_provider="mock", skills_dir=str(PROJECT_SKILLS), excel_ledger_path=str(Path(temporary_dir) / "ledger.xlsx"))
+            settings = Settings(app_env="test", app_secret="skill-test-secret", database_url=f"sqlite:///{(Path(temporary_dir) / 'skills.db').as_posix()}", model_provider="mock", skills_dir=str(PROJECT_SKILLS))
             with TestClient(create_app(settings)) as client:
                 student_token = client.post("/api/v1/auth/login", json={"username": "student", "password": "student123"}).json()["access_token"]
                 admin_token = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"}).json()["access_token"]

@@ -76,12 +76,11 @@ class AgentHarnessTests(unittest.TestCase):
             model_name="test-model",
             model_max_calls_per_run=7,
             model_run_timeout_seconds=10,
-            excel_ledger_path=str(Path(self.temp_dir.name) / "risk-ledger.xlsx"),
         )
         self.runtime = AgentRuntime(self.provider, self.settings)
         self.dispatcher = InlineToolDispatcher(
             self.session_factory,
-            self.settings.excel_ledger_path,
+            self.settings,
         )
         self.harness = AgentHarness(
             self.session_factory,
@@ -132,16 +131,15 @@ class AgentHarnessTests(unittest.TestCase):
         self.assertGreaterEqual(self._count(AgentStep), 7)
         self.assertGreater(self._count(AgentCollaborationEvent), 20)
         self.assertEqual(self._count(PsychologicalReport), 1)
-        self.assertEqual(self._count(BackgroundJob), 3)
+        self.assertEqual(self._count(BackgroundJob), 2)
         self.assertEqual(self._count(LedgerEntry), 1)
         self.assertEqual(self._count(RiskCase), 1)
         self.assertEqual(self._count(AlertDelivery), 1)
-        self.assertTrue(Path(self.settings.excel_ledger_path).is_file())
 
         trace = next(event.payload for event in events if event.type == "trace")
         self.assertEqual(
             trace["tool_plan"],
-            ["ledger_write", "case_create", "alert_send"],
+            ["case_create", "alert_send"],
         )
 
     def test_chat_service_exposes_only_public_events_and_is_idempotent(self):

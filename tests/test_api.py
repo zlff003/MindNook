@@ -22,6 +22,7 @@ from app.models import (
     Message,
     PsychologicalReport,
     RiskCase,
+    ToolJob,
     User,
 )
 from app.services.model import MockModelProvider
@@ -55,7 +56,13 @@ class MindNookApiTests(unittest.TestCase):
             demo_student_password="student123",
             demo_admin_username="admin",
             demo_admin_password="admin123",
-            excel_ledger_path=str(Path(self.temp_dir.name) / "risk-ledger.xlsx"),
+            smtp_host="",
+            smtp_username="",
+            smtp_password="",
+            smtp_from_address="",
+            alert_email_to="",
+            smtp_use_tls=False,
+            smtp_use_ssl=False,
         )
         self.client_context = TestClient(create_app(settings))
         self.client = self.client_context.__enter__()
@@ -119,7 +126,14 @@ class MindNookApiTests(unittest.TestCase):
         self.assertIn('id="reportPagination"', admin_page.text)
         self.assertIn('id="exportReportsButton"', admin_page.text)
         self.assertIn('id="exportCasesButton"', admin_page.text)
+        self.assertIn('id="operationOverviewPanel"', admin_page.text)
+        self.assertIn('id="jobGroupList"', admin_page.text)
         self.assertIn('id="exportAuditButton"', admin_page.text)
+        admin_script = self.client.get("/static/admin/admin.js")
+        self.assertEqual(admin_script.status_code, 200)
+        self.assertIn('EXCEL_REPORT: "excel_report"', admin_script.text)
+        self.assertIn('excel_report: "写入心理报告"', admin_script.text)
+        self.assertIn('return "心理报告写入流程"', admin_script.text)
 
     def test_student_registration_and_admin_created_account_use_institutional_ids(self):
         student_response = self.client.post(
@@ -280,6 +294,147 @@ class MindNookApiTests(unittest.TestCase):
         self.assertEqual(self._count(LedgerEntry), 1)
         self.assertEqual(self._count(RiskCase), 1)
         self.assertEqual(self._count(AlertDelivery), 1)
+
+    def test_admin_groups_terminal_jobs_hides_active_work_and_retries_failures(self):
+        conversation_id = self._create_conversation()
+        response = self._chat(
+            conversation_id,
+            "我想自杀，现在完全撑不住了",
+            "request-job-group-0001",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        groups = self.client.get(
+            "/api/v1/admin/job-groups",
+            headers=self._headers(self.admin_token),
+        ).json()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["status"], "SUCCESS")
+        self.assertEqual(
+            [step["job_type"] for step in groups[0]["steps"]],
+            ["CASE_CREATE", "ALERT_SEND"],
+        )
+
+        session = self.client.app.state.session_factory()
+        try:
+            alert_job = session.scalar(
+                select(ToolJob).where(ToolJob.job_type == "ALERT_SEND")
+            )
+            alert_job.status = "PENDING"
+            session.commit()
+        finally:
+            session.close()
+        hidden_groups = self.client.get(
+            "/api/v1/admin/job-groups",
+            headers=self._headers(self.admin_token),
+        ).json()
+        self.assertEqual(hidden_groups, [])
+
+        session = self.client.app.state.session_factory()
+        try:
+            alert_job = session.scalar(
+                select(ToolJob).where(ToolJob.job_type == "ALERT_SEND")
+            )
+            alert_job.status = "DEAD"
+            alert_job.attempt_count = alert_job.max_attempts
+            alert_job.last_error = "smtp connection timed out"
+            session.commit()
+        finally:
+            session.close()
+        failed_groups = self.client.get(
+            "/api/v1/admin/job-groups",
+            headers=self._headers(self.admin_token),
+        ).json()
+        self.assertEqual(len(failed_groups), 1)
+        self.assertEqual(failed_groups[0]["status"], "DEAD")
+        self.assertEqual(failed_groups[0]["steps"][0]["status"], "SUCCESS")
+        self.assertEqual(failed_groups[0]["steps"][1]["status"], "DEAD")
+
+        retry = self.client.post(
+            f"/api/v1/admin/job-groups/{failed_groups[0]['report_id']}/retry",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(len(retry.json()["retried_jobs"]), 1)
+
+        completed_groups = self.client.get(
+            "/api/v1/admin/job-groups",
+            headers=self._headers(self.admin_token),
+        ).json()
+        self.assertEqual(completed_groups[0]["status"], "SUCCESS")
+        session = self.client.app.state.session_factory()
+        try:
+            case_job = session.scalar(
+                select(ToolJob).where(ToolJob.job_type == "CASE_CREATE")
+            )
+            alert_job = session.scalar(
+                select(ToolJob).where(ToolJob.job_type == "ALERT_SEND")
+            )
+            retry_audit = session.scalar(
+                select(AuditLog).where(AuditLog.action == "job_group_retried")
+            )
+            self.assertEqual(case_job.attempt_count, 1)
+            self.assertEqual(alert_job.attempt_count, 1)
+            self.assertIsNotNone(retry_audit)
+        finally:
+            session.close()
+
+        repeated_retry = self.client.post(
+            f"/api/v1/admin/job-groups/{failed_groups[0]['report_id']}/retry",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(repeated_retry.status_code, 409)
+
+    def test_admin_retry_restores_a_fully_failed_dependent_job_group(self):
+        conversation_id = self._create_conversation()
+        response = self._chat(
+            conversation_id,
+            "我想自杀，现在完全撑不住了",
+            "request-job-group-0002",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        session = self.client.app.state.session_factory()
+        try:
+            jobs = list(session.scalars(select(ToolJob).order_by(ToolJob.id.asc())))
+            self.assertEqual(len(jobs), 2)
+            self.assertEqual(jobs[1].depends_on_job_id, jobs[0].id)
+            for job in jobs:
+                job.status = "DEAD"
+                job.attempt_count = job.max_attempts
+                job.last_error = f"forced {job.job_type} failure"
+            report_id = session.get(PsychologicalReport, jobs[0].report_id).public_id
+            session.commit()
+        finally:
+            session.close()
+
+        retry = self.client.post(
+            f"/api/v1/admin/job-groups/{report_id}/retry",
+            headers=self._headers(self.admin_token),
+        )
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(len(retry.json()["retried_jobs"]), 2)
+
+        groups = self.client.get(
+            "/api/v1/admin/job-groups",
+            headers=self._headers(self.admin_token),
+        ).json()
+        self.assertEqual(groups[0]["status"], "SUCCESS")
+        self.assertEqual(
+            [step["status"] for step in groups[0]["steps"]],
+            ["SUCCESS", "SUCCESS"],
+        )
+        self.assertEqual(self._count(RiskCase), 1)
+        self.assertEqual(self._count(AlertDelivery), 1)
+
+        session = self.client.app.state.session_factory()
+        try:
+            audit = session.scalar(
+                select(AuditLog).where(AuditLog.action == "job_group_retried")
+            )
+            self.assertIn("retried_jobs=2", audit.detail)
+        finally:
+            session.close()
 
     def test_duplicate_request_is_idempotent(self):
         conversation_id = self._create_conversation()

@@ -1,8 +1,8 @@
 # AgentHarness 工程链路说明
 
-> 文档版本：1.0  
-> 更新日期：2026-08-08  
-> 核心实现：`app/harness/agent_harness.py`  
+> 文档版本：1.1
+> 更新日期：2026-08-24
+> 核心实现：`app/harness/agent_harness.py`
 > 独立运行入口：`app/harness/runner.py`
 
 ## 1. 定位
@@ -51,7 +51,7 @@ AgentHarness
 CoordinatorAgent.plan()
   ├─ 执行固定安全规则
   ├─ UnderstandingAgent：识别意图、主题和知识需求
-  ├─ Coordinator：合并 general / psychological_support / safety_risk 路由
+  ├─ Coordinator：合并固定规则与模型结果，形成 CHAT / CONSULT / RISK
   ├─ SafetyAgent：评估最终风险等级
   ├─ ContextAgent
   │    ├─ 组装会话记忆
@@ -98,8 +98,8 @@ AgentHarness
 | 最终路由 | RAG | 心理报告 | 工具计划 |
 |---|---|---|---|
 | `CHAT` | 不调用 | 不生成 | 无 |
-| `CONSULT` | 调用 | 生成 | `ledger_write` |
-| `RISK` | 调用并补充固定安全检索主题 | 生成 | `ledger_write + case_create + alert_send` |
+| `CONSULT` | 调用 | 生成并登记 SQL 台账 | 无 |
+| `RISK` | 调用并补充固定安全检索主题 | 生成并登记 SQL 台账 | `case_create + alert_send` |
 
 ### 2.1 最终结果落库与副作用
 
@@ -141,7 +141,7 @@ Message(sender_type="assistant")
 
 ```text
 run_id / conversation / source_message
-status / route / final_risk_level
+status / risk_level
 provider / model_calls / degraded / total_latency_ms
 ```
 
@@ -179,11 +179,11 @@ Harness 根据最终风险生成工具计划，并通过 `enqueue_report_jobs()`
 
 ```text
 CHAT    → 无
-CONSULT → ledger_write
-RISK    → ledger_write + case_create + alert_send
+CONSULT → 无
+RISK    → case_create + alert_send
 ```
 
-此时只会幂等创建 `ToolJob(status="PENDING")`，并不会在数据库事务内部写 Excel、创建个案或发送预警。高风险的 `ALERT_SEND` 通过 `depends_on_job_id` 依赖 `CASE_CREATE`。这样可以避免数据库事务回滚后已经产生外部副作用。
+此时只会幂等创建 `ToolJob(status="PENDING")`，并不会在数据库事务内部创建个案或发送预警。高风险的 `ALERT_SEND` 通过 `depends_on_job_id` 依赖 `CASE_CREATE`。这样可以避免数据库事务回滚后已经产生外部副作用。
 
 上述助手消息、Trace、心理报告和后台任务全部准备完成后，Harness 才执行 `db.commit()`。因此工具 Worker 只能读取已经提交并具有完整报告关联的数据。
 
@@ -200,12 +200,11 @@ RISK    → ledger_write + case_create + alert_send
 
 短期记忆是缓存，数据库消息是可回填的事实来源。因此记忆更新位于数据库事务之外，不应反向破坏已经成功落库的聊天结果。工具任务同样在事务提交后执行：测试和独立 Harness 使用同步 `InlineToolDispatcher`，普通应用环境使用进程内 `ThreadedToolDispatcher`。后者只被 Harness 唤醒，不在流式请求线程内执行工具；完整的领取、线程池、重试、限流、死信和 MCP 说明见 [MCP_AND_TOOL_QUEUE.md](./MCP_AND_TOOL_QUEUE.md)。
 
-当前三个工具的实际效果是：
+当前两个报告任务的实际效果是：
 
 | 工具 | 当前行为 |
 |---|---|
-| `ledger_write` | 写入可重建的风险台账数据，并生成或更新 Excel 台账 |
-| `case_create` | 为中高风险报告创建 `RiskCase` 和初始个案事件 |
+| `case_create` | 仅为 `RISK` 报告创建 `RiskCase` 和初始个案事件 |
 | `alert_send` | 创建 `AlertDelivery`；SMTP 配置完整时发送邮件，否则使用 `log` 渠道留痕 |
 
 #### 失败处理
@@ -263,12 +262,11 @@ Runtime 不直接访问数据库，不创建心理报告，也不执行台账、
 8. 调用 `runtime.finalize_response()` 执行安全审查并采用或修复回复。
 9. 模型调用失败或超出 Agent 预算时调用 `generation_failed()` 生成安全降级结果。
 10. 保存助手消息、Agent Run、Agent Step、协作事件和完整 Trace。
-11. 非普通对话生成 `PsychologicalReport`。
+11. 非普通对话生成 `PsychologicalReport`，并在同一事务写入对应的 `LedgerEntry` 登记标记。
 12. 根据最终风险生成工具计划并入队：
-    - 普通问答：无工具；
-    - 低风险心理支持：`ledger_write`；
-    - 中风险：`ledger_write + case_create`；
-    - 高风险：`ledger_write + case_create + alert_send`。
+    - `CHAT`：无工具；
+    - `CONSULT`：无工具；
+    - `RISK`：`case_create + alert_send`。
 13. 提交数据库事务，更新短期记忆和 Agent 私有记忆。
 14. 分发工具任务，并发布 `delta`、`completed` 和内部 `trace` 事件。
 
@@ -314,7 +312,8 @@ Harness 不固定使用 Mock 或真实模型，实际 Provider 由配置决定�
 
 ```text
 MODEL_PROVIDER=mock       → MockModelProvider，不访问网络
-MODEL_PROVIDER=bailian    → OpenAICompatibleModelProvider，调用配置的模型 API
+MODEL_PROVIDER=openai_compatible → OpenAICompatibleModelProvider，调用配置的模型 API
+MODEL_PROVIDER=bailian    → 上述 Provider 的兼容别名
 ```
 
 单元测试通过依赖注入使用 `RecordingModelProvider(MockModelProvider)`，因此确定、离线且不消耗 API Token。
@@ -327,13 +326,13 @@ Engineering Runner 固定使用 `MockModelProvider`，以保证离线、确定�
 Runner 提供六类固定套件：
 
 | 套件 | 验证链路 |
-|---|---|---|
+|---|---|
 | `risk-safety` | 高风险识别、报告、元数据隔离和工具入队 |
 | `agent-routing` | CHAT / CONSULT / RISK 与 Agent 步骤 |
 | `standard-skills` | 标准 Skill 校验、选择和 Workflow 注入 |
 | `rag` | 108 条评测集与召回指标 |
 | `api` | 健康、认证授权、SSE、管理员知识库接口 |
-| `tool-queue` | Excel、case、alert DAG、幂等、限流和死信 |
+| `tool-queue` | case、alert DAG、幂等、限流和死信 |
 
 运行方式：
 
@@ -343,7 +342,7 @@ python -m app.harness.runner --json
 python -m app.harness.runner --suite risk-safety --suite tool-queue
 ```
 
-每个套件独立使用临时 SQLite、内存短期记忆、临时 RAG 索引和临时 Excel，
+每个套件独立使用临时 SQLite、内存短期记忆和临时 RAG 索引，
 不污染正式环境。JSON 输出包含：
 
 ```text
@@ -359,7 +358,7 @@ suites[].checks[].metrics
 
 ## 8. RAG 在 Harness 中的范围
 
-当最终评估属于 `psychological_support`、`safety_risk`，或风险等级为 `medium/high` 时，ContextAgent 会调用完整的 Hybrid RAG：
+当最终 `risk_level` 为 `CONSULT` 或 `RISK` 时，ContextAgent 会调用完整的 Hybrid RAG；`CHAT` 不触发心理 RAG：
 
 ```text
 向量召回 + BM25
@@ -398,7 +397,7 @@ RAG Evaluation --strict：更高阈值的发布级检索验收
 - 不依赖 HTTP 的高风险完整业务链；
 - 手机号进入模型前被替换为 `[PHONE]`；
 - 消息、Run、Step、协作事件、Trace 和心理报告落库；
-- 高风险台账、个案、预警任务和 Excel 文件生成；
+- 心理报告与台账登记标记的事务写入，以及高风险个案和预警任务；
 - Runtime Plan 只产生推理结果，不提前执行交付副作用；
 - ChatService 只暴露公开事件；
 - 相同 `client_request_id` 的幂等重放；

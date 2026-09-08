@@ -1,9 +1,9 @@
 # MindNook CollaborationBlackboard Agent Runtime
 
-> 文档版本：3.1  
-> 更新日期：2026-08-08  
-> 黑板实现：`app/agents/blackboard.py`  
-> Agent 与 Coordinator：`app/agents/runtime.py`  
+> 文档版本：3.2
+> 更新日期：2026-08-24
+> 黑板实现：`app/agents/blackboard.py`
+> Agent 与 Coordinator：`app/agents/runtime.py`
 > 外层业务编排：`app/harness/agent_harness.py`
 
 ## 1. 设计结论
@@ -38,7 +38,7 @@ flowchart LR
     Harness --> DB[(消息/报告/Trace/Job)]
 ```
 
-`CoordinatorAgent` 与四个专业 Agent 合起来构成当前 Agent Runtime。Harness 只调用 Coordinator 暴露的 `plan()`、`stream_response()` 和 `finalize_response()`。
+`CoordinatorAgent` 与四个专业 Agent 合起来构成当前 Agent Runtime。Harness 正常路径调用 Coordinator 暴露的 `plan()`、`stream_response()` 和 `finalize_response()`；候选生成失败时调用 `generation_failed()`。
 
 ## 3. 黑板数据结构
 
@@ -215,11 +215,11 @@ CoordinatorAgent 是调度器和最终决策者，不承担专业理解、风险
 - `risk_assessment`：对心理支持/风险输入生成最终 `risk` artifact。
 - `safety_review`：审查指定版本的 `response_proposal`。
 
-固定规则和模型风险按较高等级合并：
+固定规则、UnderstandingAgent 和 SafetyAgent 的结果按较高等级合并：
 
 ```text
-low < medium < high
-final_risk = max(rule_floor, model_risk)
+CHAT < CONSULT < RISK
+final_risk = max(rule_floor, intent_risk, model_risk)
 ```
 
 最终为高风险时发布 `SAFETY_OVERRIDE`，普通响应路径不得降低该结果。
@@ -229,16 +229,16 @@ final_risk = max(rule_floor, model_risk)
 ### 5.3 ContextAgent
 
 - capability：`context`
-- 优先从 Redis 聚合当前会话最近 40 条脱敏消息，未命中时由 MySQL `chat_messages` 回填。
-- 将较早历史按固定 4 条学生关注、3 条助手支持和本轮输入压缩为最多 500 字的 `memoryBrief`，同时保留最近 8 条带角色脱敏原文 `modelHistory`。
+- 使用 AgentHarness 在进入 Runtime 前准备好的 `MemoryContext`；Redis 读取、业务数据库回填和 PII 脱敏由 `ShortTermMemoryService` 完成，ContextAgent 不直接访问存储。
+- `MemoryContext` 将较早历史按固定 4 条学生关注、3 条助手支持和本轮输入压缩为最多 500 字的 `memoryBrief`，同时保留最近 8 条带角色脱敏原文 `modelHistory`。
 - 历史超过 8 条时将 `memoryBrief` 作为独立 system 消息，并按原角色拼接 `modelHistory`；短历史不重复注入摘要。
 - ContextAgent 的私有 key 与其他 Agent 隔离；当前确定性检索流程只记录检索策略，不把其他 Agent 的私有状态引入检索。
-- 在 psychological support / safety risk 或中高风险时加载本地审核知识和适用 Skill。
+- 最终等级为 `CONSULT` 或 `RISK` 时调用 Hybrid RAG，并加载适用 Skill；`CHAT` 不触发心理知识检索。
 - 发布知识、Skill 和不可覆盖的回复约束。
 - 启动时由 `SkillRegistry` 扫描 `skills/*/SKILL.md`，检查 frontmatter、name/description、目录名一致性与 `## Workflow`。
 - CHAT 不加载心理 Skill；CONSULT 加载基础支持与转介 Skill，并按焦虑、睡眠、学业主题叠加；RISK 加载高风险安全计划与转介 Skill。
 - 只有 `READY`、`WARN` Skill 会注入 Workflow；`FAILED` 不加载，并由固定安全回复兜底关键场景。
-- 当前知识实现是已审核内置检索；后续 RAG 可以替换检索器而不改变黑板协议。
+- 当前主检索器是 Chroma 向量召回 + BM25 + Cross-Encoder 重排；检索异常时才降级到 `app/agents/knowledge.py` 的内置关键词知识。
 
 普通问答仍产生最小 Context artifact，以便 ResponseAgent 使用近期历史，但不加载心理知识和危机 Skill。
 
@@ -330,8 +330,9 @@ Harness 持久化：
 - `agent_runs`
 - `agent_steps`
 - `agent_collaboration_events`
+- `agent_run_traces`
 
-协作事件只保存 task/artifact/message ID、类型、actor 和非敏感摘要，不保存完整 Prompt 或候选正文。
+`agent_collaboration_events` 保存事件顺序、类型、actor、task ID 和事件 payload，不保存 Artifact/Message 正文。`agent_run_traces` 则保存原始与脱敏输入、`modelHistory`、检索结果以及完整 Tasks、Artifacts、Agent Messages；其中 Artifacts 包含回复 Prompt 和候选/最终回复，因此属于高敏感审计数据，不能按普通运行摘要开放。
 
 管理端接口：
 
@@ -339,6 +340,7 @@ Harness 持久化：
 GET /api/v1/admin/agent-runs
 GET /api/v1/admin/agent-runs/{run_id}/steps
 GET /api/v1/admin/agent-runs/{run_id}/events
+GET /api/v1/admin/agent-runs/{run_id}/trace
 ```
 
 ## 9. 与 AgentHarness 的边界
@@ -349,7 +351,7 @@ CollaborationBlackboard 内没有：
 - 学生身份认证
 - PII 脱敏实现
 - 心理报告落库
-- Excel、个案和预警工具
+- SQL 台账写入、个案和预警等业务操作
 - HTTP/SSE 编码
 
 AgentHarness 负责把一轮请求送进 Runtime，并把 `AgentResult` 转换为消息、报告、工具计划和 Trace。工具任务仍在业务事务提交后异步执行。
@@ -369,10 +371,12 @@ python -m unittest discover -s tests -v
 - 修复时 proposal/review v1、v2 均被保留。
 - 最大轮次终止和 Coordinator 回退。
 
-无 HTTP 的完整业务闭环：
+无 HTTP 的完整工程验证：
 
 ```bash
-python -m app.harness.runner --scenario general --require-model
-python -m app.harness.runner --scenario support --require-model
-python -m app.harness.runner --scenario high --require-model
+python -m app.harness.runner
+python -m app.harness.runner --suite agent-routing --suite risk-safety
+python -m app.harness.runner --json
 ```
+
+当前 Runner 只支持可重复的 `--suite` 和 `--json` 参数，并固定使用 Mock Provider；真实模型连通性与回答质量需要另行验证。

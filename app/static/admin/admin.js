@@ -22,7 +22,7 @@ const ROUTES = {
   operations: {
     eyebrow: "运行审计",
     title: "系统运行",
-    description: "检查异步工具任务与多 Agent 推理运行记录。",
+    description: "优先查看需要处理的问题，再按需展开运行技术细节。",
   },
   audit: {
     eyebrow: "访问与操作追溯",
@@ -57,6 +57,7 @@ const AUDIT_ACTION_LABELS = {
   agent_trace_viewed: "查看 Agent 执行步骤",
   agent_collaboration_viewed: "查看 Agent 协作事件",
   agent_audit_memory_viewed: "查看 Agent 审计轨迹",
+  job_group_retried: "重新执行失败流程",
 };
 
 const AUDIT_RESOURCE_LABELS = {
@@ -65,6 +66,7 @@ const AUDIT_RESOURCE_LABELS = {
   case: "风险个案",
   audit_log: "审计日志",
   agent_run: "Agent 运行",
+  job_group: "后台处理流程",
   reports: "报告导出",
   cases: "个案导出",
   "audit-logs": "审计日志导出",
@@ -102,7 +104,9 @@ const state = {
   token: sessionStorage.getItem("mindnook_admin_token"),
   user: null,
   route: "overview",
-  operationTab: "jobs",
+  operationTab: "overview",
+  jobStatus: "",
+  jobType: "",
   pages: { reports: 1, cases: 1, alerts: 1, jobs: 1, runs: 1, users: 1, audit: 1 },
   pageSize: 10,
   reports: [],
@@ -131,6 +135,7 @@ const drawerPanel = detailDrawer.querySelector(".drawer-panel");
 const confirmDialog = document.querySelector("#confirmDialog");
 const noteDialog = document.querySelector("#noteDialog");
 const ownerDialog = document.querySelector("#ownerDialog");
+const adminRegistrationDialog = document.querySelector("#adminRegistrationDialog");
 const toastElement = document.querySelector("#toast");
 const adminShell = document.querySelector(".admin-shell");
 let drawerReturnFocus = null;
@@ -245,7 +250,6 @@ function userStatusLabel(status) {
 function errorText(value) {
   if (!value) return "无";
   const exact = {
-    "Excel ledger header version is incompatible": "风险台账表头版本不兼容",
     "report not found": "未找到对应报告",
     "unsupported tool job type": "不支持的后台任务类型",
     "worker restarted or running lease expired": "工作进程已重启或任务租约已过期",
@@ -312,6 +316,33 @@ function truncate(value, maxLength = 72) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
 }
 
+function searchValue(selector) {
+  return document.querySelector(selector)?.value.trim().toLocaleLowerCase("zh-CN") || "";
+}
+
+function matchesSearch(query, ...values) {
+  if (!query) return true;
+  return values.some((value) => String(value || "").toLocaleLowerCase("zh-CN").includes(query));
+}
+
+function isWithinDays(value, days) {
+  if (!days) return true;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp >= Date.now() - Number(days) * 86400000;
+}
+
+function updateFilterSummary(selector, visible, total, noun) {
+  document.querySelector(selector).textContent = visible === total
+    ? `共 ${total} 条${noun}`
+    : `显示 ${visible} / ${total} 条${noun}`;
+}
+
+function recordMeta(label, value) {
+  const item = element("span", "record-meta-item");
+  item.append(element("small", "", label), element("strong", "", value || "—"));
+  return item;
+}
+
 function routeFromHash() {
   const route = window.location.hash.replace(/^#\/?/, "");
   return ROUTES[route] ? route : "overview";
@@ -333,6 +364,7 @@ async function activateRoute(route) {
   document.querySelector("#pageEyebrow").textContent = config.eyebrow;
   document.querySelector("#pageTitle").textContent = config.title;
   document.querySelector("#pageDescription").textContent = config.description;
+  document.querySelector("#lastUpdatedAt").textContent = "正在更新…";
   document.querySelectorAll("[data-page]").forEach((page) => {
     page.classList.toggle("hidden", page.dataset.page !== route);
   });
@@ -349,6 +381,7 @@ async function activateRoute(route) {
 
 async function loadCurrentPage() {
   refreshButton.disabled = true;
+  refreshButton.classList.add("is-loading");
   setPageStatus("正在更新本页数据…", "loading");
   try {
     if (state.route === "overview") await loadOverview();
@@ -359,10 +392,16 @@ async function loadCurrentPage() {
     if (state.route === "audit") await loadAuditLogs(state.pages.audit);
     if (state.route === "users") await loadUsers();
     setPageStatus("");
+    document.querySelector("#lastUpdatedAt").textContent = `已更新 ${new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date())}`;
   } catch (error) {
     setPageStatus(error.message, "error");
+    document.querySelector("#lastUpdatedAt").textContent = "更新失败";
   } finally {
     refreshButton.disabled = false;
+    refreshButton.classList.remove("is-loading");
   }
 }
 
@@ -453,38 +492,48 @@ async function loadOverview() {
 }
 
 async function loadReports() {
-  const filter = document.querySelector("#riskFilter").value;
-  const query = filter ? `?risk_level=${encodeURIComponent(filter)}` : "";
-  const response = await api(`/api/v1/admin/reports${query}`);
+  const response = await api("/api/v1/admin/reports");
   state.reports = await response.json();
   state.pages.reports = 1;
   renderReports();
 }
 
+function filteredReports() {
+  const risk = document.querySelector("#riskFilter").value;
+  const days = document.querySelector("#reportDateFilter").value;
+  const query = searchValue("#reportSearch");
+  return state.reports.filter((report) => (
+    (!risk || report.risk_level === risk)
+    && isWithinDays(report.created_at, days)
+    && matchesSearch(query, report.student, report.emotion_summary, report.reason_summary)
+  ));
+}
+
 function renderReports() {
-  const result = paginate(state.reports, "reports");
-  const body = document.querySelector("#reportRows");
-  body.replaceChildren();
+  const filtered = filteredReports();
+  const result = paginate(filtered, "reports");
+  const list = document.querySelector("#reportRows");
+  list.replaceChildren();
   result.items.forEach((report) => {
-    const row = document.createElement("tr");
-    row.appendChild(element("td", "cell-strong", report.student));
-    const summary = element("td", "summary-cell");
-    summary.append(element("strong", "", report.emotion_summary));
-    summary.appendChild(element("p", "", truncate(report.reason_summary, 110)));
-    row.appendChild(summary);
-    const risk = document.createElement("td");
-    risk.appendChild(riskBadge(report.risk_level));
-    row.appendChild(risk);
-    row.appendChild(element("td", "nowrap", formatDate(report.created_at)));
-    const action = document.createElement("td");
+    const card = element("article", `record-card report-record${report.risk_level === "RISK" ? " is-priority" : ""}`);
+    const main = element("div", "record-main");
+    const heading = element("div", "record-heading");
+    heading.append(element("strong", "record-title", report.student), riskBadge(report.risk_level));
+    main.append(
+      heading,
+      element("p", "record-summary", report.emotion_summary || "暂无情绪摘要"),
+      element("p", "record-description", truncate(report.reason_summary, 140)),
+    );
+    const meta = element("div", "record-meta");
+    meta.append(recordMeta("生成时间", formatDate(report.created_at)));
     const button = element("button", "small-btn", "查看详情");
     button.type = "button";
     button.addEventListener("click", () => requestReportContext(report));
-    action.appendChild(button);
-    row.appendChild(action);
-    body.appendChild(row);
+    card.append(main, meta, button);
+    list.appendChild(card);
   });
-  if (!result.items.length) body.appendChild(empty("暂无符合条件的报告", 5));
+  if (!result.items.length) list.appendChild(empty("没有找到符合当前条件的报告。"));
+  updateFilterSummary("#reportFilterSummary", filtered.length, state.reports.length, "报告");
   renderPagination("#reportPagination", "reports", result, renderReports);
 }
 
@@ -539,25 +588,34 @@ async function loadCases() {
 
 function renderCases() {
   const status = document.querySelector("#caseStatusFilter").value;
-  const filtered = status ? state.cases.filter((item) => item.status === status) : state.cases;
+  const query = searchValue("#caseSearch");
+  const filtered = state.cases.filter((item) => (
+    (!status || item.status === status)
+    && matchesSearch(
+      query,
+      item.handoff_summary,
+      item.note,
+      item.owner?.name,
+      item.owner?.institutional_id,
+    )
+  ));
   const result = paginate(filtered, "cases");
-  const body = document.querySelector("#caseRows");
-  body.replaceChildren();
+  const list = document.querySelector("#caseRows");
+  list.replaceChildren();
   result.items.forEach((item) => {
-    const row = document.createElement("tr");
-    const risk = document.createElement("td");
-    risk.appendChild(riskBadge(item.risk_level));
-    row.appendChild(risk);
-    const summary = element("td", "summary-cell");
-    summary.appendChild(element("strong", "", truncate(item.handoff_summary, 130)));
-    if (item.note) summary.appendChild(element("p", "", `最近备注：${truncate(item.note, 90)}`));
-    row.appendChild(summary);
-    row.appendChild(element("td", item.owner ? "cell-strong" : "muted-text", item.owner ? `${item.owner.name}（${item.owner.institutional_id}）` : "未分配"));
-    const statusCell = document.createElement("td");
-    statusCell.appendChild(caseStatusBadge(item.status));
-    row.appendChild(statusCell);
-    row.appendChild(element("td", "nowrap", formatDate(item.created_at)));
-    const actions = element("td", "table-actions");
+    const card = element("article", `record-card case-record${!item.owner && item.status !== "closed" ? " needs-owner" : ""}`);
+    const main = element("div", "record-main");
+    const heading = element("div", "record-heading");
+    heading.append(riskBadge(item.risk_level), caseStatusBadge(item.status));
+    if (!item.owner && item.status !== "closed") heading.appendChild(element("span", "attention-chip", "待分配"));
+    main.append(heading, element("p", "record-summary", truncate(item.handoff_summary, 150)));
+    if (item.note) main.appendChild(element("p", "record-description", `最近备注：${truncate(item.note, 100)}`));
+    const meta = element("div", "record-meta");
+    meta.append(
+      recordMeta("负责人", item.owner ? `${item.owner.name}（${item.owner.institutional_id}）` : "未分配"),
+      recordMeta("创建时间", formatDate(item.created_at)),
+    );
+    const actions = element("div", "record-actions");
     const history = element("button", "small-btn", "详情");
     history.type = "button";
     history.addEventListener("click", () => viewCaseHistory(item));
@@ -595,10 +653,27 @@ function renderCases() {
     }
     menu.append(menuSummary, menuPanel);
     actions.appendChild(menu);
-    row.appendChild(actions);
-    body.appendChild(row);
+    card.append(main, meta, actions);
+    list.appendChild(card);
   });
-  if (!result.items.length) body.appendChild(empty("暂无符合条件的风险个案", 6));
+  if (!result.items.length) list.appendChild(empty("没有找到符合当前条件的风险个案。"));
+  updateFilterSummary("#caseFilterSummary", filtered.length, state.cases.length, "个案");
+  document.querySelectorAll("[data-case-status]").forEach((button) => {
+    const buttonStatus = button.dataset.caseStatus;
+    const count = buttonStatus
+      ? state.cases.filter((item) => item.status === buttonStatus).length
+      : state.cases.length;
+    const label = {
+      "": "全部",
+      pending: "待处理",
+      notified: "已通知",
+      assigned: "已分配",
+      following: "跟进中",
+      closed: "已关闭",
+    }[buttonStatus];
+    button.textContent = `${label} ${count}`;
+    button.classList.toggle("active", buttonStatus === status);
+  });
   renderPagination("#casePagination", "cases", result, renderCases);
 }
 
@@ -713,21 +788,31 @@ async function loadAlerts() {
 
 function renderAlerts() {
   const status = document.querySelector("#alertStatusFilter").value;
-  const filtered = status ? state.alerts.filter((item) => item.status === status) : state.alerts;
+  const query = searchValue("#alertSearch");
+  const filtered = state.alerts.filter((item) => (
+    (!status || item.status === status)
+    && matchesSearch(query, channelLabel(item.channel), item.summary)
+  ));
   const result = paginate(filtered, "alerts");
-  const body = document.querySelector("#alertRows");
-  body.replaceChildren();
+  const list = document.querySelector("#alertRows");
+  list.replaceChildren();
   result.items.forEach((item) => {
-    const row = document.createElement("tr");
-    const statusCell = document.createElement("td");
-    statusCell.appendChild(statusBadge(item.status, { sent: "已发送", failed: "发送失败", pending: "待发送" }));
-    row.appendChild(statusCell);
-    row.appendChild(element("td", "cell-strong", channelLabel(item.channel)));
-    row.appendChild(element("td", "summary-cell", item.summary));
-    row.appendChild(element("td", "nowrap", formatDate(item.created_at)));
-    body.appendChild(row);
+    const card = element("article", `record-card alert-record${item.status === "failed" ? " is-priority" : ""}`);
+    const marker = element("span", `channel-mark channel-${item.channel || "unknown"}`, item.channel === "email" || item.channel === "smtp" ? "邮" : "记");
+    const main = element("div", "record-main");
+    const heading = element("div", "record-heading");
+    heading.append(
+      element("strong", "record-title", channelLabel(item.channel)),
+      statusBadge(item.status, { sent: "已发送", failed: "发送失败", pending: "待发送" }),
+    );
+    main.append(heading, element("p", "record-summary", item.summary || "暂无预警摘要"));
+    const meta = element("div", "record-meta");
+    meta.append(recordMeta("创建时间", formatDate(item.created_at)));
+    card.append(marker, main, meta);
+    list.appendChild(card);
   });
-  if (!result.items.length) body.appendChild(empty("暂无符合条件的预警记录", 4));
+  if (!result.items.length) list.appendChild(empty("没有找到符合当前条件的预警记录。"));
+  updateFilterSummary("#alertFilterSummary", filtered.length, state.alerts.length, "预警");
   renderPagination("#alertPagination", "alerts", result, renderAlerts);
 }
 
@@ -796,7 +881,9 @@ async function loadUsers() {
 }
 
 function renderUsers() {
-  const result = paginate(state.users, "users");
+  const query = searchValue("#userSearch");
+  const filtered = state.users.filter((user) => matchesSearch(query, user.institutional_id, user.name));
+  const result = paginate(filtered, "users");
   const body = document.querySelector("#userRows");
   body.replaceChildren();
   result.items.forEach((user) => {
@@ -808,17 +895,20 @@ function renderUsers() {
     row.appendChild(element("td", "nowrap", formatDate(user.created_at)));
     body.appendChild(row);
   });
-  if (!result.items.length) body.appendChild(empty("暂无用户", 5));
+  if (!result.items.length) body.appendChild(empty("没有找到符合当前条件的用户", 5));
   renderPagination("#userPagination", "users", result, renderUsers);
 }
 
 async function downloadExport(type, params = new URLSearchParams()) {
   const caseStatus = document.querySelector("#caseStatusFilter").value;
+  const reportRisk = document.querySelector("#riskFilter").value;
   const exportMeta = {
     reports: {
       title: "导出心理支持报告",
-      count: state.reports.length,
-      warning: "文件将完整包含学生原始表达等敏感原文。",
+      count: reportRisk
+        ? state.reports.filter((item) => item.risk_level === reportRisk).length
+        : state.reports.length,
+      warning: "文件将完整包含学生原始表达等敏感原文，并按当前风险等级导出。",
     },
     cases: {
       title: "导出风险个案",
@@ -862,90 +952,344 @@ async function downloadExport(type, params = new URLSearchParams()) {
 }
 
 async function loadOperationTab() {
-  if (state.operationTab === "jobs") await loadJobs();
+  if (state.operationTab === "overview") await loadOperationOverview();
+  else if (state.operationTab === "jobs") await loadJobs();
   else if (state.operationTab === "runs") await loadAgentRuns();
   else await loadSkills();
 }
 
 async function switchOperationTab(tab) {
-  state.operationTab = ["jobs", "runs", "skills"].includes(tab) ? tab : "jobs";
+  state.operationTab = ["overview", "jobs", "runs", "skills"].includes(tab) ? tab : "overview";
   document.querySelectorAll("[data-operation-tab]").forEach((button) => {
     const active = button.dataset.operationTab === state.operationTab;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
+  document.querySelector("#operationOverviewPanel").classList.toggle("hidden", state.operationTab !== "overview");
   document.querySelector("#jobsPanel").classList.toggle("hidden", state.operationTab !== "jobs");
   document.querySelector("#runsPanel").classList.toggle("hidden", state.operationTab !== "runs");
   document.querySelector("#skillsPanel").classList.toggle("hidden", state.operationTab !== "skills");
   await loadCurrentPage();
 }
 
+async function loadOperationOverview() {
+  const [jobsResponse, runsResponse, skillsResponse] = await Promise.all([
+    api("/api/v1/admin/job-groups"),
+    api("/api/v1/admin/agent-runs"),
+    api("/api/v1/admin/skills"),
+  ]);
+  [state.jobs, state.runs, state.skills] = await Promise.all([
+    jobsResponse.json(),
+    runsResponse.json(),
+    skillsResponse.json(),
+  ]);
+  renderOperationOverview();
+}
+
+function renderOperationOverview() {
+  const failedGroups = state.jobs.filter((item) => item.status === "DEAD");
+  const failedRuns = state.runs.filter((item) => item.status === "failed");
+  const degradedRuns = state.runs.filter((item) => item.degraded);
+  const failedSkills = state.skills.filter((item) => item.status === "FAILED");
+  const warningSkills = state.skills.filter((item) => item.status === "WARN");
+  const issueCount = failedGroups.length + failedRuns.length + failedSkills.length;
+  const noticeCount = degradedRuns.length + warningSkills.length;
+  const banner = document.querySelector("#operationHealthBanner");
+  banner.className = `operation-health-banner${issueCount ? " has-issues" : noticeCount ? " has-warnings" : ""}`;
+  banner.replaceChildren();
+  const message = element("div", "");
+  message.append(
+    element(
+      "strong",
+      "",
+      issueCount
+        ? `有 ${issueCount} 项需要处理`
+        : noticeCount
+          ? `当前没有失败，有 ${noticeCount} 项运行提醒`
+          : "当前未发现需要处理的异常",
+    ),
+    element(
+      "p",
+      "",
+      issueCount
+        ? "请优先处理失败流程或不可用技能。等待和执行中的后台任务不会在这里展示。"
+        : noticeCount
+          ? "部分 Agent 使用了安全降级，或技能存在非阻断性警告，可在下方查看详情。"
+          : "后台流程、Agent 运行和技能资产当前均没有需要管理员处理的异常。",
+    ),
+  );
+  banner.appendChild(message);
+
+  document.querySelector("#operationJobSummary").textContent = failedGroups.length
+    ? `${failedGroups.length} 项失败`
+    : `${state.jobs.length} 项已结束`;
+  document.querySelector("#operationRunSummary").textContent = failedRuns.length
+    ? `${failedRuns.length} 次失败`
+    : degradedRuns.length
+      ? `${degradedRuns.length} 次降级`
+      : "最近运行正常";
+  document.querySelector("#operationSkillSummary").textContent = failedSkills.length
+    ? `${failedSkills.length} 项不可用`
+    : warningSkills.length
+      ? `${warningSkills.length} 项警告`
+      : `${state.skills.length} 项就绪`;
+
+  const attention = document.querySelector("#operationAttentionList");
+  attention.replaceChildren();
+  failedGroups.slice(0, 3).forEach((group) => {
+    attention.appendChild(operationActivityItem(
+      "后台处理失败",
+      `${jobGroupSummary(group)} · ${truncate(errorText(group.last_error), 72)}`,
+      group.finished_at,
+      "danger",
+      () => switchOperationTab("jobs"),
+    ));
+  });
+  failedRuns.slice(0, 3).forEach((run) => {
+    attention.appendChild(operationActivityItem(
+      "Agent 运行失败",
+      `${riskLevelText(run.risk_level)} · ${run.total_latency_ms} 毫秒`,
+      run.created_at,
+      "danger",
+      () => viewAgentRun(run),
+    ));
+  });
+  failedSkills.slice(0, 3).forEach((skill) => {
+    attention.appendChild(operationActivityItem(
+      `${skillNameLabel(skill.name)}不可用`,
+      skill.issues.join("；") || "技能校验失败",
+      null,
+      "danger",
+      () => switchOperationTab("skills"),
+    ));
+  });
+  if (!attention.children.length) attention.appendChild(empty("当前没有需要处理的问题。"));
+
+  const recent = document.querySelector("#operationRecentList");
+  recent.replaceChildren();
+  const activities = [
+    ...state.jobs.map((group) => ({
+      title: group.status === "DEAD" ? "后台处理失败" : "后台处理完成",
+      detail: jobGroupSummary(group),
+      time: group.finished_at,
+      tone: group.status === "DEAD" ? "danger" : "success",
+      action: () => viewJobGroup(group),
+    })),
+    ...state.runs.map((run) => ({
+      title: run.degraded ? "Agent 使用安全降级" : run.status === "failed" ? "Agent 运行失败" : "Agent 运行完成",
+      detail: `${riskLevelText(run.risk_level)} · ${run.total_latency_ms} 毫秒`,
+      time: run.created_at,
+      tone: run.degraded || run.status === "failed" ? "warning" : "success",
+      action: () => viewAgentRun(run),
+    })),
+  ].sort((left, right) => new Date(right.time || 0) - new Date(left.time || 0));
+  activities.slice(0, 5).forEach((item) => {
+    recent.appendChild(operationActivityItem(item.title, item.detail, item.time, item.tone, item.action));
+  });
+  if (!recent.children.length) recent.appendChild(empty("暂无运行记录。"));
+}
+
+function operationActivityItem(title, detail, time, tone, action) {
+  const button = element("button", `operation-activity-item tone-${tone}`);
+  button.type = "button";
+  const copy = element("span", "operation-activity-copy");
+  copy.append(element("strong", "", title), element("small", "", detail));
+  button.append(copy, element("time", "", time ? formatDate(time) : "查看详情"));
+  button.addEventListener("click", action);
+  return button;
+}
+
 async function loadJobs() {
-  const response = await api("/api/v1/admin/jobs");
+  const response = await api("/api/v1/admin/job-groups");
   state.jobs = await response.json();
   state.pages.jobs = 1;
   renderJobs();
 }
 
 function renderJobs() {
-  const selectedStatus = document.querySelector("#jobStatusFilter").value;
-  const status = {
-    succeeded: "SUCCESS",
-    dead_letter: "DEAD",
-  }[selectedStatus] || selectedStatus.toUpperCase();
-  const filtered = status ? state.jobs.filter((item) => item.status === status) : state.jobs;
+  const typeScoped = state.jobs.filter((item) => !state.jobType || jobGroupType(item) === state.jobType);
+  const filtered = typeScoped
+    .filter((item) => !state.jobStatus || item.status === state.jobStatus)
+    .sort((left, right) => {
+      if (left.status !== right.status) return left.status === "DEAD" ? -1 : 1;
+      return new Date(right.finished_at || 0) - new Date(left.finished_at || 0);
+    });
   const result = paginate(filtered, "jobs");
-  const body = document.querySelector("#jobRows");
-  body.replaceChildren();
-  result.items.forEach((item) => {
-    const row = document.createElement("tr");
-    row.appendChild(element("td", "cell-strong", jobTypeLabel(item.job_type)));
-    const statusCell = document.createElement("td");
-    statusCell.appendChild(statusBadge(item.status, {
-      pending: "等待执行",
-      running: "执行中",
-      succeeded: "已完成",
-      dead_letter: "异常任务",
-    }));
-    row.appendChild(statusCell);
-    row.appendChild(element("td", "", String(item.attempt_count)));
-    row.appendChild(element("td", item.last_error ? "error-text" : "muted-text", truncate(errorText(item.last_error), 100)));
-    row.appendChild(element("td", "nowrap", formatDate(item.created_at)));
-    body.appendChild(row);
+  const list = document.querySelector("#jobGroupList");
+  list.replaceChildren();
+  result.items.forEach((item) => list.appendChild(buildJobGroupCard(item)));
+  if (!result.items.length) list.appendChild(empty("暂无符合条件的处理记录。"));
+  document.querySelectorAll("[data-job-status]").forEach((button) => {
+    const status = button.dataset.jobStatus;
+    const count = status ? typeScoped.filter((item) => item.status === status).length : typeScoped.length;
+    const label = status === "DEAD" ? "失败" : status === "SUCCESS" ? "已完成" : "全部";
+    button.textContent = `${label} ${count}`;
+    button.classList.toggle("active", status === state.jobStatus);
   });
-  if (!result.items.length) body.appendChild(empty("暂无符合条件的后台任务", 5));
   renderPagination("#jobPagination", "jobs", result, renderJobs);
+}
+
+function jobGroupSummary(group) {
+  const completed = group.steps.filter((step) => step.status === "SUCCESS").length;
+  const failed = group.steps.filter((step) => step.status === "DEAD").length;
+  return failed
+    ? `${completed} 个步骤完成，${failed} 个步骤失败`
+    : `${group.steps.length} 个步骤全部完成`;
+}
+
+function jobGroupTitle(group) {
+  const type = jobGroupType(group);
+  if (type === "RISK_FOLLOWUP") return "高风险跟进流程";
+  if (type === "EXCEL_REPORT") return "心理报告写入流程";
+  return "后台处理流程";
+}
+
+function jobGroupType(group) {
+  const types = new Set(group.steps.map((step) => String(step.job_type || "").toUpperCase()));
+  if (types.has("CASE_CREATE") || types.has("ALERT_SEND")) return "RISK_FOLLOWUP";
+  if (types.has("EXCEL_REPORT")) return "EXCEL_REPORT";
+  return "OTHER";
+}
+
+function buildJobGroupCard(group) {
+  const card = element("article", `job-group-card${group.status === "DEAD" ? " failed" : ""}`);
+  const header = element("div", "job-group-header");
+  const heading = element("div", "");
+  heading.append(
+    element("strong", "", jobGroupTitle(group)),
+    element("p", "muted-text", `报告 ${group.report_id} · ${formatDate(group.finished_at)}`),
+  );
+  header.append(
+    heading,
+    statusBadge(group.status, { succeeded: "全部完成", dead_letter: "处理失败" }),
+  );
+  card.appendChild(header);
+  const steps = element("ol", "job-step-list");
+  group.steps.forEach((step) => {
+    const row = element("li", `job-step job-step-${step.status.toLowerCase()}`);
+    const marker = element("span", "job-step-marker", step.status === "SUCCESS" ? "✓" : "!");
+    const copy = element("div", "job-step-copy");
+    copy.append(
+      element("strong", "", jobTypeLabel(step.job_type)),
+      element("small", "", step.status === "SUCCESS" ? "已完成" : `失败 ${step.attempt_count} 次`),
+    );
+    row.append(marker, copy);
+    steps.appendChild(row);
+  });
+  card.appendChild(steps);
+  if (group.last_error) card.appendChild(element("p", "job-group-error", truncate(errorText(group.last_error), 120)));
+  const actions = element("div", "job-group-actions");
+  const detailButton = element("button", "small-btn", "查看技术详情");
+  detailButton.type = "button";
+  detailButton.addEventListener("click", () => viewJobGroup(group));
+  actions.appendChild(detailButton);
+  if (group.status === "DEAD") {
+    const retryButton = element("button", "small-btn primary-action-btn", "重新执行失败步骤");
+    retryButton.type = "button";
+    retryButton.addEventListener("click", () => retryJobGroup(group, retryButton));
+    actions.appendChild(retryButton);
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+function viewJobGroup(group) {
+  const content = document.createDocumentFragment();
+  const facts = element("dl", "detail-facts");
+  appendFact(facts, "报告 ID", group.report_id);
+  appendFact(facts, "处理结果", group.status === "DEAD" ? "处理失败" : "全部完成");
+  appendFact(facts, "累计尝试", `${group.attempt_count} 次`);
+  appendFact(facts, "结束时间", formatDate(group.finished_at));
+  content.appendChild(facts);
+  const section = element("section", "detail-section");
+  section.appendChild(element("h3", "", "处理步骤"));
+  const list = element("ol", "step-list");
+  group.steps.forEach((step, index) => {
+    const item = document.createElement("li");
+    const head = element("div", "step-head");
+    head.append(
+      element("strong", "", `${index + 1}. ${jobTypeLabel(step.job_type)}`),
+      statusBadge(step.status, { succeeded: "已完成", dead_letter: "失败" }),
+    );
+    item.appendChild(head);
+    item.appendChild(element("p", "muted-text", `尝试 ${step.attempt_count}/${step.max_attempts} 次 · ${formatDate(step.finished_at)}`));
+    if (step.last_error) item.appendChild(element("p", "error-text", errorText(step.last_error)));
+    list.appendChild(item);
+  });
+  section.appendChild(list);
+  content.appendChild(section);
+  openDrawer("后台处理详情", content, "技术详情");
+}
+
+async function retryJobGroup(group, button) {
+  const failedSteps = group.steps
+    .filter((step) => step.status === "DEAD")
+    .map((step) => jobTypeLabel(step.job_type));
+  const confirmed = await confirmAction(
+    "重新执行失败步骤",
+    `将重新执行：${failedSteps.join("、")}。已经成功的步骤不会重复执行，本次操作会写入审计日志。`,
+    "确认重新执行",
+  );
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/job-groups/${group.report_id}/retry`, { method: "POST" });
+    toast("失败步骤已重新提交执行");
+    await loadJobs();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  }
 }
 
 function jobTypeLabel(type) {
   type = {
-    EXCEL_REPORT: "ledger_write",
+    EXCEL_REPORT: "excel_report",
     CASE_CREATE: "case_create",
     ALERT_SEND: "alert_send",
   }[type] || type;
-  return { ledger_write: "写入风险台账", case_create: "创建风险个案", alert_send: "发送风险预警" }[type] || type;
+  return {
+    excel_report: "写入心理报告",
+    case_create: "创建风险个案",
+    alert_send: "发送风险预警",
+  }[type] || type;
 }
 
 async function loadSkills() {
   const response = await api("/api/v1/admin/skills");
   state.skills = await response.json();
+  renderSkills();
+}
+
+function renderSkills() {
   const body = document.querySelector("#skillRows");
   body.replaceChildren();
+  const failed = state.skills.filter((skill) => skill.status === "FAILED").length;
+  const warnings = state.skills.filter((skill) => skill.status === "WARN").length;
+  const ready = state.skills.filter((skill) => skill.status === "READY").length;
+  const summary = document.querySelector("#skillSummary");
+  summary.className = `skill-summary${failed ? " has-issues" : ""}`;
+  summary.textContent = failed
+    ? `${failed} 个技能不可用，建议先处理校验问题。`
+    : warnings
+      ? `${ready} 个技能就绪，${warnings} 个技能存在警告。`
+      : `${ready} 个技能全部就绪。`;
   state.skills.forEach((skill) => {
-    const row = document.createElement("tr");
-    row.appendChild(element("td", "cell-strong", skillNameLabel(skill.name)));
-    const status = document.createElement("td");
-    status.appendChild(statusBadge(skill.status, {
+    const card = element("article", "skill-status-card");
+    const head = element("div", "skill-status-head");
+    head.append(element("strong", "", skillNameLabel(skill.name)), statusBadge(skill.status, {
       READY: "就绪",
       WARN: "有警告",
       FAILED: "校验失败",
     }));
-    row.appendChild(status);
-    row.appendChild(element("td", "", localizedDescription(skill.description)));
-    row.appendChild(element("td", skill.issues.length ? "error-text" : "muted-text", skill.issues.join("；") || "校验通过"));
-    body.appendChild(row);
+    card.append(
+      head,
+      element("p", "skill-description", localizedDescription(skill.description)),
+      element("p", skill.issues.length ? "skill-issue" : "skill-valid", skill.issues.join("；") || "结构和工作流校验通过"),
+    );
+    body.appendChild(card);
   });
-  if (!state.skills.length) body.appendChild(empty("未发现 Skill 资产", 4));
+  if (!state.skills.length) body.appendChild(empty("未发现 Skill 资产"));
 }
 
 async function loadAgentRuns() {
@@ -960,29 +1304,31 @@ function renderAgentRuns() {
   const body = document.querySelector("#agentRunRows");
   body.replaceChildren();
   result.items.forEach((run) => {
-    const row = document.createElement("tr");
-    const risk = document.createElement("td");
-    risk.appendChild(riskBadge(run.risk_level));
-    row.appendChild(risk);
-    row.appendChild(element("td", "", `${providerLabel(run.provider)} · ${run.model_calls} 次`));
-    const status = document.createElement("td");
-    status.appendChild(statusBadge(run.degraded ? "degraded" : run.status, {
+    const card = element("article", "operation-run-card");
+    const main = element("div", "operation-run-main");
+    const heading = element("div", "operation-run-heading");
+    heading.append(
+      riskBadge(run.risk_level),
+      element("strong", "", run.degraded ? "安全降级回复" : `${riskLevelText(run.risk_level)}对话评估`),
+    );
+    main.append(
+      heading,
+      element("p", "muted-text", `${providerLabel(run.provider)} · 模型调用 ${run.model_calls} 次 · ${formatDate(run.created_at)}`),
+    );
+    const resultBlock = element("div", "operation-run-result");
+    resultBlock.append(statusBadge(run.degraded ? "degraded" : run.status, {
       succeeded: "正常",
       completed: "正常",
       failed: "失败",
       degraded: "已降级",
-    }));
-    row.appendChild(status);
-    row.appendChild(element("td", "nowrap", `${run.total_latency_ms} ms`));
-    const action = document.createElement("td");
+    }), element("strong", "", `${run.total_latency_ms} 毫秒`));
     const button = element("button", "small-btn", "查看运行");
     button.type = "button";
     button.addEventListener("click", () => viewAgentRun(run));
-    action.appendChild(button);
-    row.appendChild(action);
-    body.appendChild(row);
+    card.append(main, resultBlock, button);
+    body.appendChild(card);
   });
-  if (!result.items.length) body.appendChild(empty("暂无 Agent 运行记录", 5));
+  if (!result.items.length) body.appendChild(empty("暂无 Agent 运行记录"));
   renderPagination("#runPagination", "runs", result, renderAgentRuns);
 }
 
@@ -1198,7 +1544,18 @@ loginForm.addEventListener("submit", async (event) => {
 
 document.querySelector("#logoutButton").addEventListener("click", logout);
 refreshButton.addEventListener("click", loadCurrentPage);
-document.querySelector("#riskFilter").addEventListener("change", loadReports);
+document.querySelector("#riskFilter").addEventListener("change", () => {
+  state.pages.reports = 1;
+  renderReports();
+});
+document.querySelector("#reportDateFilter").addEventListener("change", () => {
+  state.pages.reports = 1;
+  renderReports();
+});
+document.querySelector("#reportSearch").addEventListener("input", () => {
+  state.pages.reports = 1;
+  renderReports();
+});
 document.querySelector("#exportReportsButton").addEventListener("click", () => {
   const params = new URLSearchParams();
   const risk = document.querySelector("#riskFilter").value;
@@ -1206,6 +1563,17 @@ document.querySelector("#exportReportsButton").addEventListener("click", () => {
   downloadExport("reports", params);
 });
 document.querySelector("#caseStatusFilter").addEventListener("change", () => {
+  state.pages.cases = 1;
+  renderCases();
+});
+document.querySelectorAll("[data-case-status]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelector("#caseStatusFilter").value = button.dataset.caseStatus;
+    state.pages.cases = 1;
+    renderCases();
+  });
+});
+document.querySelector("#caseSearch").addEventListener("input", () => {
   state.pages.cases = 1;
   renderCases();
 });
@@ -1219,20 +1587,45 @@ document.querySelector("#alertStatusFilter").addEventListener("change", () => {
   state.pages.alerts = 1;
   renderAlerts();
 });
-document.querySelector("#jobStatusFilter").addEventListener("change", () => {
+document.querySelector("#alertSearch").addEventListener("input", () => {
+  state.pages.alerts = 1;
+  renderAlerts();
+});
+document.querySelectorAll("[data-job-status]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.jobStatus = button.dataset.jobStatus;
+    state.pages.jobs = 1;
+    renderJobs();
+  });
+});
+document.querySelector("#auditSearchButton").addEventListener("click", () => loadAuditLogs(1));
+document.querySelector("#auditResetButton").addEventListener("click", () => {
+  document.querySelector("#auditActionFilter").value = "";
+  document.querySelector("#auditResourceFilter").value = "";
+  document.querySelector("#auditActorFilter").value = "";
+  loadAuditLogs(1);
+});
+document.querySelector("#exportAuditButton").addEventListener("click", () => downloadExport("audit-logs", auditQuery(false)));
+document.querySelector("#userRoleFilter").addEventListener("change", loadUsers);
+document.querySelector("#userSearch").addEventListener("input", () => {
+  state.pages.users = 1;
+  renderUsers();
+});
+document.querySelector("#jobTypeFilter").addEventListener("change", (event) => {
+  state.jobType = event.currentTarget.value;
   state.pages.jobs = 1;
   renderJobs();
 });
-document.querySelector("#auditSearchButton").addEventListener("click", () => loadAuditLogs(1));
-document.querySelector("#exportAuditButton").addEventListener("click", () => downloadExport("audit-logs", auditQuery(false)));
-document.querySelector("#userRoleFilter").addEventListener("change", loadUsers);
 document.querySelectorAll("[data-operation-tab]").forEach((button) => {
   button.addEventListener("click", () => switchOperationTab(button.dataset.operationTab));
+});
+document.querySelectorAll("[data-operation-nav]").forEach((button) => {
+  button.addEventListener("click", () => switchOperationTab(button.dataset.operationNav));
 });
 document.querySelectorAll("[data-nav]").forEach((button) => {
   button.addEventListener("click", () => {
     if (button.dataset.risk) document.querySelector("#riskFilter").value = button.dataset.risk;
-    if (button.dataset.nav === "operations") state.operationTab = "jobs";
+    if (button.dataset.nav === "operations") state.operationTab = "overview";
     navigate(button.dataset.nav);
   });
 });
@@ -1272,6 +1665,12 @@ document.addEventListener("keydown", (event) => {
 
 document.querySelector("#cancelNoteButton").addEventListener("click", () => noteDialog.close());
 document.querySelector("#cancelOwnerButton").addEventListener("click", () => ownerDialog.close());
+document.querySelector("#openAdminRegistrationButton").addEventListener("click", () => {
+  document.querySelector("#adminRegistrationForm").reset();
+  document.querySelector("#adminRegistrationError").textContent = "";
+  adminRegistrationDialog.showModal();
+});
+document.querySelector("#cancelAdminRegistrationButton").addEventListener("click", () => adminRegistrationDialog.close());
 document.querySelector("#ownerForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type='submit']");
@@ -1313,6 +1712,7 @@ document.querySelector("#adminRegistrationForm").addEventListener("submit", asyn
       }),
     });
     form.reset();
+    adminRegistrationDialog.close();
     toast("管理员账号已创建");
     await loadUsers();
   } catch (error) {

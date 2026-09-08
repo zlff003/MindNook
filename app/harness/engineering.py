@@ -26,7 +26,6 @@ from app.models import (
     AlertDelivery,
     Conversation,
     DeadLetterRecord,
-    LedgerEntry,
     Message,
     PsychologicalReport,
     RiskCase,
@@ -108,7 +107,6 @@ class HarnessEnvironment:
             rag_bm25_weight=0.55,
             rag_reranker_enabled=False,
             skills_dir=str(PROJECT_ROOT / "skills"),
-            excel_ledger_path=str(self.root / "risk-ledger.xlsx"),
             tool_worker_retry_base_seconds=0.01,
             alert_rate_limit_per_minute=1,
         )
@@ -247,9 +245,9 @@ def _run_risk_safety() -> list[CheckResult]:
                 _check(
                     "risk-tool-jobs-enqueued",
                     [job.job_type for job in jobs]
-                    == ["EXCEL_REPORT", "CASE_CREATE", "ALERT_SEND"]
+                    == ["CASE_CREATE", "ALERT_SEND"]
                     and all(job.status == "PENDING" for job in jobs),
-                    "RISK must enqueue the durable Excel/case/alert DAG before workers run.",
+                    "RISK must enqueue the durable case/alert DAG before workers run.",
                     jobs=[{"type": job.job_type, "status": job.status} for job in jobs],
                     dispatch_count=env.dispatcher.dispatch_count,
                 ),
@@ -487,7 +485,6 @@ def _run_api() -> list[CheckResult]:
             rag_bm25_weight=0.55,
             rag_reranker_enabled=False,
             skills_dir=str(PROJECT_ROOT / "skills"),
-            excel_ledger_path=str(root / "risk-ledger.xlsx"),
             demo_student_username="student",
             demo_student_password="student123",
             demo_admin_username="admin",
@@ -590,16 +587,16 @@ def _run_tool_queue() -> list[CheckResult]:
             first = enqueue_report_jobs(
                 db,
                 report,
-                ["ledger_write", "case_create", "alert_send"],
+                ["case_create", "alert_send"],
             )
             second = enqueue_report_jobs(
                 db,
                 report,
-                ["ledger_write", "case_create", "alert_send"],
+                ["case_create", "alert_send"],
             )
             db.commit()
             ids_match = [job.id for job in first] == [job.id for job in second]
-            dependency_ok = first[2].depends_on_job_id == first[1].id
+            dependency_ok = first[1].depends_on_job_id == first[0].id
             job_count = _count(db, ToolJob)
         finally:
             db.close()
@@ -612,10 +609,8 @@ def _run_tool_queue() -> list[CheckResult]:
             successful_jobs = list(db.scalars(select(ToolJob).order_by(ToolJob.id)))
             execution_ok = (
                 all(job.status == SUCCESS for job in successful_jobs)
-                and _count(db, LedgerEntry) == 1
                 and _count(db, RiskCase) == 1
                 and _count(db, AlertDelivery) == 1
-                and Path(env.settings.excel_ledger_path).is_file()
             )
         finally:
             db.close()
@@ -650,16 +645,15 @@ def _run_tool_queue() -> list[CheckResult]:
         return [
             _check(
                 "durable-dag-and-idempotency",
-                ids_match and dependency_ok and job_count == 3,
-                "Excel/case/alert jobs must form one idempotent durable DAG.",
+                ids_match and dependency_ok and job_count == 2,
+                "Case/alert jobs must form one idempotent durable DAG.",
                 job_count=job_count,
                 alert_depends_on_case=dependency_ok,
             ),
             _check(
-                "excel-case-alert-execution",
+                "case-alert-execution",
                 execution_ok,
-                "The queue must execute Excel, case, and alert operations through production handlers.",
-                excel_exists=Path(env.settings.excel_ledger_path).is_file(),
+                "The queue must execute case and alert operations through production handlers.",
             ),
             _check(
                 "alert-rate-limit",

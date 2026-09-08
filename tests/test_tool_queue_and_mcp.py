@@ -4,7 +4,6 @@ import tempfile
 import time
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
 from sqlalchemy import func, select
 
 from app.core.config import Settings
@@ -15,7 +14,6 @@ from app.models import (
     AlertDelivery,
     Conversation,
     DeadLetterRecord,
-    LedgerEntry,
     Message,
     PsychologicalReport,
     RiskCase,
@@ -25,7 +23,7 @@ from app.models import (
 )
 from app.services.jobs import (
     DEAD,
-    EXCEL_REPORT,
+    CASE_CREATE,
     RUNNING,
     SUCCESS,
     enqueue_report_jobs,
@@ -38,7 +36,7 @@ from app.services.tool_dispatcher import (
     ThreadedToolDispatcher,
     _PerMinuteRateLimiter,
 )
-from app.tools.operations import LEDGER_HEADERS
+from app.tools.operations import ToolOperations
 
 
 def _count(db, model) -> int:
@@ -49,12 +47,10 @@ class TestToolQueueAndMcp:
     def setup_method(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temp_dir.name) / "tool-queue.db"
-        self.excel_path = Path(self.temp_dir.name) / "risk-ledger.xlsx"
         self.database_url = f"sqlite:///{self.database_path.as_posix()}"
         self.settings = Settings(
             app_env="test",
             database_url=self.database_url,
-            excel_ledger_path=str(self.excel_path),
             tool_worker_poll_seconds=0.05,
             tool_worker_retry_base_seconds=0.01,
         )
@@ -110,17 +106,17 @@ class TestToolQueueAndMcp:
             first = enqueue_report_jobs(
                 db,
                 report,
-                ["ledger_write", "case_create", "alert_send"],
+                ["case_create", "alert_send"],
             )
             second = enqueue_report_jobs(
                 db,
                 report,
-                ["ledger_write", "case_create", "alert_send"],
+                ["case_create", "alert_send"],
             )
             db.commit()
             assert [job.id for job in first] == [job.id for job in second]
-            assert first[2].depends_on_job_id == first[1].id
-            assert _count(db, ToolJob) == 3
+            assert first[1].depends_on_job_id == first[0].id
+            assert _count(db, ToolJob) == 2
         finally:
             db.close()
 
@@ -131,60 +127,61 @@ class TestToolQueueAndMcp:
             jobs = list(db.scalars(select(ToolJob).order_by(ToolJob.id)))
             assert {job.status for job in jobs} == {SUCCESS}
             assert all(job.attempt_count == 1 for job in jobs)
-            assert _count(db, LedgerEntry) == 1
             assert _count(db, RiskCase) == 1
             assert _count(db, AlertDelivery) == 1
-            assert self.excel_path.is_file()
         finally:
             db.close()
 
-    def test_excel_ledger_migrates_legacy_header_and_risk_values(self):
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "心理风险台账"
-        sheet.append(
-            (
-                "report_id",
-                "student_id",
-                "created_at",
-                "dialogue_type",
-                "risk_level",
-                "confidence",
-                "emotion_summary",
-                "reason_summary",
-            )
-        )
-        sheet.append(
-            (
-                "legacy-report",
-                "legacy-student",
-                "2026-08-01T00:00:00",
-                "psychological_support",
-                "low",
-                0.85,
-                "legacy emotion",
-                "legacy reason",
-            )
-        )
-        workbook.save(self.excel_path)
-        workbook.close()
+    def test_email_alert_supports_implicit_ssl(self, monkeypatch):
+        calls = []
 
-        report = self._report("RISK")
-        db = self.session_factory()
-        try:
-            enqueue_report_jobs(db, report, ["ledger_write"])
-            db.commit()
-        finally:
-            db.close()
-        InlineToolDispatcher(self.session_factory, self.settings).dispatch()
+        class FakeSmtpSsl:
+            def __init__(self, host, port, timeout):
+                calls.append(("connect", host, port, timeout))
 
-        migrated = load_workbook(self.excel_path, read_only=True)
-        migrated_sheet = migrated.active
-        assert tuple(cell.value for cell in migrated_sheet[1]) == LEDGER_HEADERS
-        assert migrated_sheet["D2"].value == "CONSULT"
-        assert migrated_sheet["D3"].value == "RISK"
-        assert migrated_sheet.max_row == 3
-        migrated.close()
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def login(self, username, password):
+                calls.append(("login", username, password))
+
+            def send_message(self, message):
+                calls.append(("send", message["To"]))
+
+        monkeypatch.setattr("app.tools.operations.smtplib.SMTP_SSL", FakeSmtpSsl)
+        settings = Settings(
+            app_env="test",
+            database_url=self.database_url,
+            smtp_host="smtp.qq.com",
+            smtp_port=465,
+            smtp_username="sender@qq.com",
+            smtp_password="authorization-code",
+            smtp_from_address="sender@qq.com",
+            alert_email_to="receiver@qq.com",
+            smtp_use_tls=False,
+            smtp_use_ssl=True,
+        )
+        report = PsychologicalReport(
+            public_id="report-email-test",
+            risk_level="RISK",
+            emotion_summary="requires review",
+        )
+        risk_case = RiskCase(public_id="case-email-test")
+
+        result = ToolOperations(self.session_factory, settings)._send_email(
+            report,
+            risk_case,
+        )
+
+        assert result == "email"
+        assert calls == [
+            ("connect", "smtp.qq.com", 465, 10),
+            ("login", "sender@qq.com", "authorization-code"),
+            ("send", "receiver@qq.com"),
+        ]
 
     def test_permanent_failure_is_recorded_once_in_dead_letter_table(self):
         db = self.session_factory()
@@ -217,7 +214,7 @@ class TestToolQueueAndMcp:
         try:
             job = enqueue_tool_job(
                 db,
-                job_type=EXCEL_REPORT,
+                job_type=CASE_CREATE,
                 idempotency_key="recover:test",
                 payload={"report_id": "missing"},
             )
@@ -276,22 +273,22 @@ class TestToolQueueAndMcp:
         assert limiter.acquire_or_delay() > 59
 
     def test_threaded_dispatch_is_non_blocking(self):
-        report = self._report("CONSULT")
+        report = self._report("RISK")
         db = self.session_factory()
         try:
-            enqueue_report_jobs(db, report, ["ledger_write"])
+            enqueue_report_jobs(db, report, ["case_create"])
             db.commit()
         finally:
             db.close()
 
         dispatcher = ThreadedToolDispatcher(self.session_factory, self.settings)
-        original = dispatcher.operations.excel_report
+        original = dispatcher.operations.case_create
 
-        def slow_excel(report_id):
+        def slow_case_create(report_id):
             time.sleep(0.25)
             return original(report_id)
 
-        dispatcher.operations.excel_report = slow_excel
+        dispatcher.operations.case_create = slow_case_create
         dispatcher.start()
         started = time.monotonic()
         dispatcher.dispatch()
@@ -310,10 +307,9 @@ class TestToolQueueAndMcp:
         dispatcher.close()
         assert status == SUCCESS
 
-    def test_fastmcp_registers_six_tools_and_stdio_client_runs_high_risk_chain(self):
+    def test_fastmcp_registers_five_tools_and_stdio_client_runs_high_risk_chain(self):
         tools = asyncio.run(mcp.list_tools())
         assert {tool.name for tool in tools} == {
-            "mindbridge_excel_report",
             "mindbridge_case_create",
             "mindbridge_alert_send",
             "mindbridge_alert_ack",
@@ -323,18 +319,15 @@ class TestToolQueueAndMcp:
         report = self._report()
         child_env = dict(os.environ)
         child_env["DATABASE_URL"] = self.database_url
-        child_env["EXCEL_LEDGER_PATH"] = str(self.excel_path)
         outputs = asyncio.run(
             run_report_tools(report.public_id, "RISK", env=child_env)
         )
         assert [item["tool"] for item in outputs] == [
-            "mindbridge_excel_report",
             "mindbridge_case_create",
             "mindbridge_alert_send",
         ]
         db = self.session_factory()
         try:
-            assert _count(db, LedgerEntry) == 1
             assert _count(db, RiskCase) == 1
             assert _count(db, AlertDelivery) == 1
         finally:

@@ -66,28 +66,32 @@
             </button>
           </div>
 
-          <p class="nav-label">管理工作区</p>
-          <nav class="admin-nav" aria-label="管理端主导航">
+          <p class="nav-label">业务工作</p>
+          <nav class="admin-nav" aria-label="业务工作导航">
             <a href="#/overview" data-route="overview">
-              <span class="nav-index">01</span><span>工作台</span>
+              <span class="nav-icon" aria-hidden="true">台</span><span>工作台</span>
             </a>
             <a href="#/reports" data-route="reports">
-              <span class="nav-index">02</span><span>心理报告</span>
+              <span class="nav-icon" aria-hidden="true">报</span><span>心理报告</span>
             </a>
             <a href="#/cases" data-route="cases">
-              <span class="nav-index">03</span><span>风险个案</span>
+              <span class="nav-icon" aria-hidden="true">案</span><span>风险个案</span>
             </a>
             <a href="#/alerts" data-route="alerts">
-              <span class="nav-index">04</span><span>预警中心</span>
+              <span class="nav-icon" aria-hidden="true">警</span><span>预警中心</span>
             </a>
+          </nav>
+
+          <p class="nav-label nav-label-secondary">系统管理</p>
+          <nav class="admin-nav" aria-label="系统管理导航">
             <a href="#/operations" data-route="operations">
-              <span class="nav-index">05</span><span>系统运行</span>
+              <span class="nav-icon" aria-hidden="true">运</span><span>系统运行</span>
             </a>
             <a href="#/audit" data-route="audit">
-              <span class="nav-index">06</span><span>审计中心</span>
+              <span class="nav-icon" aria-hidden="true">审</span><span>审计中心</span>
             </a>
             <a href="#/users" data-route="users">
-              <span class="nav-index">07</span><span>用户管理</span>
+              <span class="nav-icon" aria-hidden="true">人</span><span>用户管理</span>
             </a>
           </nav>
 
@@ -116,34 +120,37 @@
               <h1 id="pageTitle">安全跟进工作台</h1>
               <p id="pageDescription">聚焦需要管理员关注的报告、个案和系统状态。</p>
             </div>
-            <button id="refreshButton" class="primary-btn compact-btn" type="button">
-              刷新本页
-            </button>
+            <div class="admin-header-actions">
+              <span id="lastUpdatedAt" class="last-updated">尚未更新</span>
+              <button id="refreshButton" class="small-btn refresh-btn" type="button">
+                <span class="refresh-icon" aria-hidden="true">↻</span>刷新
+              </button>
+            </div>
           </header>
 
           <div id="pageStatus" class="page-status" role="status" aria-live="polite"></div>
 
           <section class="admin-page" data-page="overview" aria-labelledby="pageTitle">
             <div class="metric-grid" aria-label="概览指标">
-              <button class="metric-card metric-link" type="button" data-nav="reports">
-                <span class="metric-label">心理支持报告</span>
-                <strong id="reportCount" class="metric-value">—</strong>
-                <span class="metric-action">查看全部报告</span>
-              </button>
-              <button class="metric-card metric-link" type="button" data-nav="reports" data-risk="RISK">
+              <button class="metric-card metric-link metric-priority" type="button" data-nav="reports" data-risk="RISK">
                 <span class="metric-label">高风险事件</span>
                 <strong id="highRiskCount" class="metric-value danger-value">—</strong>
                 <span class="metric-action">优先查看</span>
               </button>
-              <button class="metric-card metric-link" type="button" data-nav="cases">
+              <button class="metric-card metric-link metric-priority" type="button" data-nav="cases">
                 <span class="metric-label">待跟进个案</span>
                 <strong id="openCaseCount" class="metric-value">—</strong>
                 <span class="metric-action">进入个案中心</span>
               </button>
-              <button class="metric-card metric-link" type="button" data-nav="operations">
-                <span class="metric-label">异常后台任务</span>
+              <button class="metric-card metric-link metric-priority" type="button" data-nav="operations">
+                <span class="metric-label">失败处理流程</span>
                 <strong id="failedJobCount" class="metric-value">—</strong>
                 <span class="metric-action">检查系统运行</span>
+              </button>
+              <button class="metric-card metric-link" type="button" data-nav="reports">
+                <span class="metric-label">心理支持报告</span>
+                <strong id="reportCount" class="metric-value">—</strong>
+                <span class="metric-action">查看全部报告</span>
               </button>
             </div>
 
@@ -176,9 +183,13 @@
               <div class="panel-header filter-header">
                 <div>
                   <p class="panel-kicker">智能生成 · 人工复核</p>
-                  <h2>心理支持报告</h2>
+                  <h2>报告列表</h2>
                 </div>
-                <div class="filter-actions">
+                <div class="filter-actions list-filter-actions">
+                  <label class="compact-field search-field">
+                    <span>搜索</span>
+                    <input id="reportSearch" type="search" placeholder="学生或摘要" />
+                  </label>
                   <label class="compact-field">
                     <span>风险等级</span>
                     <select id="riskFilter">
@@ -187,23 +198,21 @@
                       <option value="RISK">高风险</option>
                     </select>
                   </label>
-                  <button id="exportReportsButton" class="small-btn" type="button">导出 Excel</button>
+                  <label class="compact-field">
+                    <span>时间</span>
+                    <select id="reportDateFilter">
+                      <option value="">全部时间</option>
+                      <option value="7">最近 7 天</option>
+                      <option value="30">最近 30 天</option>
+                    </select>
+                  </label>
                 </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>学生</th>
-                      <th>情绪与原因摘要</th>
-                      <th>风险等级</th>
-                      <th>生成时间</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="reportRows"></tbody>
-                </table>
+              <div class="list-toolbar">
+                <span id="reportFilterSummary" class="filter-summary">全部报告</span>
+                <button id="exportReportsButton" class="small-btn" type="button">导出 Excel</button>
               </div>
+              <div id="reportRows" class="record-list"></div>
               <div id="reportPagination" class="pagination"></div>
             </section>
           </section>
@@ -213,12 +222,24 @@
               <div class="panel-header filter-header">
                 <div>
                   <p class="panel-kicker">人工跟进闭环</p>
-                  <h2>风险个案</h2>
+                  <h2>个案队列</h2>
                 </div>
-                <div class="filter-actions">
-                  <label class="compact-field">
+                <div class="filter-actions list-filter-actions">
+                  <label class="compact-field search-field">
+                    <span>搜索</span>
+                    <input id="caseSearch" type="search" placeholder="摘要或负责人" />
+                  </label>
+                  <div class="compact-field case-status-field">
                     <span>个案状态</span>
-                    <select id="caseStatusFilter">
+                    <div class="status-filter-group case-status-filters" aria-label="个案状态筛选">
+                      <button class="status-filter active" type="button" data-case-status="">全部</button>
+                      <button class="status-filter" type="button" data-case-status="pending">待处理</button>
+                      <button class="status-filter" type="button" data-case-status="notified">已通知</button>
+                      <button class="status-filter" type="button" data-case-status="assigned">已分配</button>
+                      <button class="status-filter" type="button" data-case-status="following">跟进中</button>
+                      <button class="status-filter" type="button" data-case-status="closed">已关闭</button>
+                    </div>
+                    <select id="caseStatusFilter" class="visually-hidden" aria-hidden="true" tabindex="-1">
                       <option value="">全部状态</option>
                       <option value="pending">待处理</option>
                       <option value="notified">已通知</option>
@@ -226,25 +247,14 @@
                       <option value="following">跟进中</option>
                       <option value="closed">已关闭</option>
                     </select>
-                  </label>
-                  <button id="exportCasesButton" class="small-btn" type="button">导出 Excel</button>
+                  </div>
                 </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>风险</th>
-                      <th>交接摘要</th>
-                      <th>负责人</th>
-                      <th>状态</th>
-                      <th>创建时间</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="caseRows"></tbody>
-                </table>
+              <div class="list-toolbar">
+                <span id="caseFilterSummary" class="filter-summary">全部个案</span>
+                <button id="exportCasesButton" class="small-btn" type="button">导出 Excel</button>
               </div>
+              <div id="caseRows" class="record-list case-record-list"></div>
               <div id="casePagination" class="pagination"></div>
             </section>
           </section>
@@ -254,7 +264,7 @@
               <div class="panel-header filter-header">
                 <div>
                   <p class="panel-kicker">敏感访问 · 重要操作</p>
-                  <h2>审计中心</h2>
+                    <h2>操作记录</h2>
                 </div>
                 <div class="filter-actions">
                   <label class="compact-field">
@@ -292,6 +302,7 @@
                     <input id="auditActorFilter" placeholder="工号/学号" />
                   </label>
                   <button id="auditSearchButton" class="small-btn" type="button">查询</button>
+                  <button id="auditResetButton" class="ghost-btn compact-ghost-btn" type="button">重置</button>
                   <button id="exportAuditButton" class="small-btn" type="button">导出 Excel</button>
                 </div>
               </div>
@@ -314,49 +325,27 @@
           </section>
 
           <section class="admin-page hidden" data-page="users" aria-labelledby="pageTitle">
-            <div class="overview-grid user-management-grid">
-              <section class="panel page-panel">
-                <div class="panel-header">
-                  <div>
-                    <p class="panel-kicker">仅已有管理员可操作</p>
-                    <h2>创建管理员账号</h2>
-                  </div>
-                </div>
-                <form id="adminRegistrationForm" class="admin-registration-form">
-                  <label class="field">
-                    <span>工号</span>
-                    <input name="institutional_id" minlength="3" maxlength="64" required />
-                  </label>
-                  <label class="field">
-                    <span>姓名</span>
-                    <input name="name" maxlength="128" required />
-                  </label>
-                  <label class="field">
-                    <span>初始密码</span>
-                    <input name="password" type="password" minlength="8" autocomplete="new-password" required />
-                  </label>
-                  <label class="field">
-                    <span>确认密码</span>
-                    <input name="password_confirm" type="password" minlength="8" autocomplete="new-password" required />
-                  </label>
-                  <p id="adminRegistrationError" class="form-error" role="alert"></p>
-                  <button class="primary-btn" type="submit">创建管理员</button>
-                </form>
-              </section>
-              <section class="panel page-panel">
+            <section class="panel page-panel">
                 <div class="panel-header">
                   <div>
                     <p class="panel-kicker">数据库用户</p>
-                    <h2>用户列表</h2>
+                    <h2>账号列表</h2>
                   </div>
-                  <label class="compact-field">
-                    <span>角色</span>
-                    <select id="userRoleFilter">
-                      <option value="">全部</option>
-                      <option value="student">学生</option>
-                      <option value="admin">管理员</option>
-                    </select>
-                  </label>
+                  <div class="filter-actions">
+                    <label class="compact-field search-field">
+                      <span>搜索</span>
+                      <input id="userSearch" type="search" placeholder="姓名或学号/工号" />
+                    </label>
+                    <label class="compact-field">
+                      <span>角色</span>
+                      <select id="userRoleFilter">
+                        <option value="">全部</option>
+                        <option value="student">学生</option>
+                        <option value="admin">管理员</option>
+                      </select>
+                    </label>
+                    <button id="openAdminRegistrationButton" class="primary-btn compact-btn" type="button">新增管理员</button>
+                  </div>
                 </div>
                 <div class="table-wrap">
                   <table>
@@ -367,8 +356,7 @@
                   </table>
                 </div>
                 <div id="userPagination" class="pagination"></div>
-              </section>
-            </div>
+            </section>
           </section>
 
           <section class="admin-page hidden" data-page="alerts" aria-labelledby="pageTitle">
@@ -376,39 +364,37 @@
               <div class="panel-header filter-header">
                 <div>
                   <p class="panel-kicker">风险触达记录</p>
-                  <h2>预警中心</h2>
+                  <h2>预警记录</h2>
                 </div>
-                <label class="compact-field">
-                  <span>发送状态</span>
-                  <select id="alertStatusFilter">
-                    <option value="">全部状态</option>
-                    <option value="sent">已发送</option>
-                    <option value="failed">发送失败</option>
-                    <option value="pending">待发送</option>
-                  </select>
-                </label>
+                <div class="filter-actions list-filter-actions">
+                  <label class="compact-field search-field">
+                    <span>搜索</span>
+                    <input id="alertSearch" type="search" placeholder="渠道或预警摘要" />
+                  </label>
+                  <label class="compact-field">
+                    <span>发送状态</span>
+                    <select id="alertStatusFilter">
+                      <option value="">全部状态</option>
+                      <option value="sent">已发送</option>
+                      <option value="failed">发送失败</option>
+                      <option value="pending">待发送</option>
+                    </select>
+                  </label>
+                </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>状态</th>
-                      <th>渠道</th>
-                      <th>预警摘要</th>
-                      <th>创建时间</th>
-                    </tr>
-                  </thead>
-                  <tbody id="alertRows"></tbody>
-                </table>
-              </div>
+              <div class="list-toolbar"><span id="alertFilterSummary" class="filter-summary">全部预警</span></div>
+              <div id="alertRows" class="record-list alert-record-list"></div>
               <div id="alertPagination" class="pagination"></div>
             </section>
           </section>
 
           <section class="admin-page hidden" data-page="operations" aria-labelledby="pageTitle">
             <div class="operation-tabs" role="tablist" aria-label="系统运行分类">
-              <button id="jobsTab" class="operation-tab active" type="button" role="tab" aria-selected="true" data-operation-tab="jobs">
-                后台任务
+              <button id="operationOverviewTab" class="operation-tab active" type="button" role="tab" aria-selected="true" data-operation-tab="overview">
+                运行总览
+              </button>
+              <button id="jobsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="jobs">
+                处理记录
               </button>
               <button id="runsTab" class="operation-tab" type="button" role="tab" aria-selected="false" data-operation-tab="runs">
                 Agent 运行
@@ -418,37 +404,71 @@
               </button>
             </div>
 
-            <section id="jobsPanel" class="panel page-panel operation-panel" role="tabpanel">
+            <section id="operationOverviewPanel" class="operation-panel" role="tabpanel">
+              <div id="operationHealthBanner" class="operation-health-banner" aria-live="polite"></div>
+              <div class="operation-summary-grid">
+                <button class="operation-summary-card" type="button" data-operation-nav="jobs">
+                  <span>后台处理记录</span>
+                  <strong id="operationJobSummary">—</strong>
+                  <small>仅统计已经结束的流程</small>
+                </button>
+                <button class="operation-summary-card" type="button" data-operation-nav="runs">
+                  <span>Agent 运行</span>
+                  <strong id="operationRunSummary">—</strong>
+                  <small>查看风险判断和运行耗时</small>
+                </button>
+                <button class="operation-summary-card" type="button" data-operation-nav="skills">
+                  <span>技能资产</span>
+                  <strong id="operationSkillSummary">—</strong>
+                  <small>检查技能是否可以正常使用</small>
+                </button>
+              </div>
+              <div class="operation-overview-grid">
+                <section class="panel operation-overview-section">
+                  <div class="panel-header">
+                    <div>
+                      <p class="panel-kicker">异常优先</p>
+                      <h2>需要处理</h2>
+                    </div>
+                  </div>
+                  <div id="operationAttentionList" class="operation-activity-list"></div>
+                </section>
+                <section class="panel operation-overview-section">
+                  <div class="panel-header">
+                    <div>
+                      <p class="panel-kicker">最近结果</p>
+                      <h2>最近活动</h2>
+                    </div>
+                  </div>
+                  <div id="operationRecentList" class="operation-activity-list"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="jobsPanel" class="panel page-panel operation-panel hidden" role="tabpanel">
               <div class="panel-header filter-header">
                 <div>
-                  <p class="panel-kicker">异步工具任务</p>
-                  <h2>后台任务</h2>
+                  <p class="panel-kicker">按同一报告合并</p>
+                  <h2>后台处理记录</h2>
+                  <p class="panel-description">只展示已经完成或最终失败的流程，不展示等待和执行中的任务。</p>
                 </div>
-                <label class="compact-field">
-                  <span>任务状态</span>
-                  <select id="jobStatusFilter">
-                    <option value="">全部状态</option>
-                    <option value="pending">等待执行</option>
-                    <option value="running">执行中</option>
-                    <option value="succeeded">已完成</option>
-                    <option value="dead_letter">异常任务</option>
-                  </select>
-                </label>
+                <div class="job-filter-controls">
+                  <label class="compact-field">
+                    <span>流程类型</span>
+                    <select id="jobTypeFilter">
+                      <option value="">全部流程</option>
+                      <option value="EXCEL_REPORT">心理报告写入</option>
+                      <option value="RISK_FOLLOWUP">高风险跟进</option>
+                    </select>
+                  </label>
+                  <div id="jobStatusFilters" class="status-filter-group" aria-label="处理记录筛选">
+                    <button class="status-filter active" type="button" data-job-status="">全部</button>
+                    <button class="status-filter" type="button" data-job-status="DEAD">失败</button>
+                    <button class="status-filter" type="button" data-job-status="SUCCESS">已完成</button>
+                  </div>
+                </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>任务类型</th>
-                      <th>状态</th>
-                      <th>尝试次数</th>
-                      <th>异常信息</th>
-                      <th>创建时间</th>
-                    </tr>
-                  </thead>
-                  <tbody id="jobRows"></tbody>
-                </table>
-              </div>
+              <div id="jobGroupList" class="job-group-list"></div>
               <div id="jobPagination" class="pagination"></div>
             </section>
 
@@ -459,20 +479,7 @@
                   <h2>Agent 运行记录</h2>
                 </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>风险等级</th>
-                      <th>模型调用</th>
-                      <th>运行状态</th>
-                      <th>总耗时</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="agentRunRows"></tbody>
-                </table>
-              </div>
+              <div id="agentRunRows" class="operation-run-list"></div>
               <div id="runPagination" class="pagination"></div>
             </section>
 
@@ -483,19 +490,8 @@
                   <h2>技能资产状态</h2>
                 </div>
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>技能名称</th>
-                      <th>状态</th>
-                      <th>用途</th>
-                      <th>校验信息</th>
-                    </tr>
-                  </thead>
-                  <tbody id="skillRows"></tbody>
-                </table>
-              </div>
+              <div id="skillSummary" class="skill-summary"></div>
+              <div id="skillRows" class="skill-card-grid"></div>
             </section>
           </section>
         </div>
@@ -563,6 +559,37 @@
         <div class="dialog-actions">
           <button id="cancelOwnerButton" class="ghost-btn" type="button">取消</button>
           <button class="primary-btn compact-btn" type="submit">确认分配</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="adminRegistrationDialog" class="admin-dialog registration-dialog">
+      <form id="adminRegistrationForm">
+        <p class="eyebrow">账号管理</p>
+        <h2>新增管理员</h2>
+        <p class="dialog-copy">新账号将获得管理端访问权限，请确认工号和姓名准确无误。</p>
+        <div class="dialog-field-grid">
+          <label class="field">
+            <span>工号</span>
+            <input name="institutional_id" minlength="3" maxlength="64" required />
+          </label>
+          <label class="field">
+            <span>姓名</span>
+            <input name="name" maxlength="128" required />
+          </label>
+          <label class="field">
+            <span>初始密码</span>
+            <input name="password" type="password" minlength="8" autocomplete="new-password" required />
+          </label>
+          <label class="field">
+            <span>确认密码</span>
+            <input name="password_confirm" type="password" minlength="8" autocomplete="new-password" required />
+          </label>
+        </div>
+        <p id="adminRegistrationError" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancelAdminRegistrationButton" class="ghost-btn" type="button">取消</button>
+          <button class="primary-btn compact-btn" type="submit">创建管理员</button>
         </div>
       </form>
     </dialog>

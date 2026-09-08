@@ -1,8 +1,8 @@
 # MindNook RAG 模块
 
-> 文档版本：1.0  
-> 更新日期：2026-08-08  
-> 主要实现：`app/rag/`  
+> 文档版本：1.1
+> 更新日期：2026-08-24
+> 主要实现：`app/rag/`
 > 默认调用方：`ContextAgent`
 
 ## 1. 模块定位
@@ -35,7 +35,7 @@ flowchart LR
     E --> G[关键词候选]
     F --> H[分数归一化与加权融合]
     G --> H
-    H --> I[本地特征重排]
+    H --> I[本地 Cross-Encoder 重排]
     I --> J[第一名前后文扩展]
     J --> L[来源去重后的 Top 3]
     L --> M[ContextAgent]
@@ -134,7 +134,7 @@ char_end
 默认名称为：
 
 ```text
-mindnook_knowledge_d384
+mindnook_knowledge_d512
 ```
 
 ### 6.2 懒加载与更新
@@ -146,7 +146,7 @@ mindnook_knowledge_d384
 - Chroma 中不再存在于当前知识库的 Chunk 会被删除；
 - 当前 Chunk 以每批 100 条执行 `upsert`。
 
-`get_rag_service()` 使用 LRU 缓存共享服务实例，缓存键包含环境、路径、切块参数、维度、候选数、Top K 和融合权重。
+`get_rag_service()` 使用 LRU 缓存共享服务实例，缓存键包含环境、路径、Embedding、切块参数、维度、候选数、Top K、融合权重和 Reranker 配置。
 
 ## 7. 中文 Embedding
 
@@ -165,7 +165,7 @@ vector_score = max(0, 1 - cosine_distance)
 
 ## 8. BM25 关键词召回
 
-BM25 与 Embedding 共用中文二元、三元片段分词，以改善没有空格的中文文本匹配。默认参数：
+BM25 使用中文二元、三元片段分词，以改善没有空格的中文文本匹配；`LocalChineseEmbedding` 测试后端复用同一分词函数，正式 FastEmbed 模型使用自身 tokenizer。默认 BM25 参数：
 
 ```text
 k1 = 1.5
@@ -234,13 +234,13 @@ rerank_score = 0.50 × cross_encoder_score
 
 ## 12. 第一名上下文扩展
 
-固定切块可能把一句话或一组建议拆开。最终排序完成后，系统对第一名 Chunk 执行同文档邻块扩展：
+固定切块可能把一句话或一组建议拆开。最终排序完成后，系统会对首个被选中的 Chunk 执行同文档邻块扩展：普通 `CHAT/CONSULT` 检索扩展排序第一名；`RISK` 检索先固定选择并扩展《安全风险与危机支持边界》中的安全 Chunk。
 
 ```text
-前一块 + 第一名 + 后一块
+前一块 + 首个选中块 + 后一块
 ```
 
-合并时会识别重叠文本，避免把 overlap 内容重复两遍。第一名已经覆盖其相邻块，因此后续结果会跳过这些 Chunk，并优先选择不同知识来源。默认最终返回 3 条上下文。
+合并时会识别重叠文本，避免把 overlap 内容重复两遍。已扩展上下文覆盖的相邻 Chunk 会被跳过，后续名额优先选择不同知识来源。默认最终返回 3 条上下文。
 
 扩展信息保存在 `RetrievalHit.expanded_content` 和 `expanded_chunk_ids` 中。传给 Prompt 时会附带来源文件、章节、融合分、重排分和“已扩展前后文”标记。
 
@@ -260,13 +260,11 @@ rerank_score = 0.50 × cross_encoder_score
 
 ## 14. ContextAgent 接入
 
-`ContextAgent` 在以下场景触发 RAG：
+`ContextAgent` 只按本轮最终 `risk_level` 判断是否触发 RAG：
 
-- 对话类型为 `psychological_support`；
-- 对话类型为 `safety_risk`；
-- 风险等级为 `medium` 或 `high`。
-
-普通问答保持 `retrieval_mode = "not_required"`，不调用 RAG。
+- `CONSULT`：触发；
+- `RISK`：触发，并加入固定安全主题与安全知识名额；
+- `CHAT`：保持 `retrieval_mode = "not_required"`，不调用心理 RAG。
 
 检索成功后：
 

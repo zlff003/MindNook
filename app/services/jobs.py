@@ -20,7 +20,6 @@ from app.models import (
 from app.tools.operations import ToolOperations
 
 
-EXCEL_REPORT = "EXCEL_REPORT"
 CASE_CREATE = "CASE_CREATE"
 ALERT_SEND = "ALERT_SEND"
 CASE_NOTE_ADD = "CASE_NOTE_ADD"
@@ -32,7 +31,6 @@ RUNNING = "RUNNING"
 SUCCESS = "SUCCESS"
 DEAD = "DEAD"
 
-EXCEL_JOB_TYPES = {EXCEL_REPORT}
 CASE_JOB_TYPES = {CASE_CREATE, CASE_NOTE_ADD, ALERT_ACK}
 ALERT_JOB_TYPES = {ALERT_SEND, ALERT_NOTIFY}
 
@@ -117,19 +115,7 @@ def enqueue_report_jobs(
     """Persist the risk-level tool DAG selected by AgentHarness."""
     requested = set(tool_plan)
     jobs: list[ToolJob] = []
-    excel_job: ToolJob | None = None
     case_job: ToolJob | None = None
-    if "ledger_write" in requested:
-        excel_job = enqueue_tool_job(
-            db,
-            job_type=EXCEL_REPORT,
-            idempotency_key=f"excel_report:{report.public_id}",
-            payload={"report_id": report.public_id},
-            report_id=report.id,
-            priority=50,
-            max_attempts=max_attempts,
-        )
-        jobs.append(excel_job)
     if "case_create" in requested:
         case_job = enqueue_tool_job(
             db,
@@ -155,7 +141,7 @@ def enqueue_report_jobs(
             max_attempts=max_attempts,
         )
         jobs.append(alert_job)
-    unsupported = requested - {"ledger_write", "case_create", "alert_send"}
+    unsupported = requested - {"case_create", "alert_send"}
     if unsupported:
         raise ValueError(f"unsupported tool plan items: {sorted(unsupported)}")
     return jobs
@@ -163,8 +149,6 @@ def enqueue_report_jobs(
 
 def execute_tool_job(job: ToolJob, operations: ToolOperations) -> dict:
     payload = json.loads(job.payload_json or "{}")
-    if job.job_type == EXCEL_REPORT:
-        return operations.excel_report(payload["report_id"])
     if job.job_type == CASE_CREATE:
         return operations.case_create(payload["report_id"])
     if job.job_type == ALERT_SEND:
@@ -225,7 +209,11 @@ def _dead_letter(db, job: ToolJob, error: str) -> None:
     existing = db.scalar(
         select(DeadLetterRecord).where(DeadLetterRecord.job_id == job.id)
     )
-    if not existing:
+    if existing:
+        existing.attempts = job.attempt_count
+        existing.last_error = job.last_error
+        existing.failed_at = utc_now()
+    else:
         db.add(
             DeadLetterRecord(
                 job_id=job.id,

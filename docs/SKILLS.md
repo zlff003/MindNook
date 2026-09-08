@@ -1,7 +1,7 @@
 # 心理场景 Skill 系统
 
-> 文档版本：1.0  
-> 更新日期：2026-08-13  
+> 文档版本：1.1
+> 更新日期：2026-08-24
 > 主要实现：`skills/*/SKILL.md`、`app/skills/registry.py`、`app/agents/runtime.py`、`app/services/reporting.py`
 
 ## 1. 定位与边界
@@ -32,7 +32,7 @@ flowchart LR
 | 组件 | 与 Skill 的关系 |
 |---|---|
 | `UnderstandingAgent` | 判断意图和主题，为后续场景路由提供信息，不直接加载 Skill |
-| `SafetyAgent` | 评估风险，并使用本轮已加载的 Workflow 审查或修复候选回复 |
+| `SafetyAgent` | 评估风险，并使用本轮已加载的 Workflow 审查候选回复；修复由 ResponseAgent 完成 |
 | `ContextAgent` | 读取记忆、执行需要的 RAG 检索，并按风险与主题选择 Skill，将 Workflow 注入上下文 |
 | `ResponseAgent` | 使用 Skill 上下文生成候选回复，不自行补写未加载 Skill 的规则或资源事实 |
 | `CoordinatorAgent` | 管理任务板、模型调用预算、超时与最终采纳，不把调度逻辑交给 Skill |

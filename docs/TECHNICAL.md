@@ -1,208 +1,234 @@
 # MindNook 技术文档
 
-> 文档版本：1.1  
-> 更新日期：2026-08-08
+> 文档版本：2.0
+> 更新日期：2026-08-24
+> 事实来源：当前工作区代码、自动化测试与 `.env.example`
 
 ## 1. 系统概述
 
-MindNook 是一个前后端一体的校园心理关怀 Web 应用，包含学生对话端、管理员后台、智能体协作、心理知识库、风险评估和异步预警等能力。
+MindNook 是一个前后端一体的校园心理支持 Web 应用，包含学生注册与对话、管理员工作台、多智能体协作、本地心理知识检索、SQL 心理台账、风险个案、预警、按需 Excel 导出和审计 Trace。
 
-系统采用 Python 后端与原生 Web 前端，支持本地模型和 OpenAI-compatible 模型，并使用 MySQL、Redis 和 Chroma 分别保存业务数据、短期记忆和向量知识。
+项目默认以 SQLite、Mock Model Provider 运行；Redis 不可用时短期记忆会从业务数据库回填。完整基础设施模式可切换到 MySQL、Redis 和 OpenAI-compatible 模型服务。Chroma 保存可重建的本地向量索引。
 
 ## 2. 技术栈
 
-| 模块 | 技术 |
+| 模块 | 当前实现 |
 |---|---|
-| 后端 | Python、FastAPI、Uvicorn |
-| 前端 | HTML、CSS、JavaScript |
-| 业务数据库 | MySQL、SQLAlchemy |
-| 短期记忆 | Redis |
-| AI大模型 | 阿里百炼大模型 API |
-| 智能体编排 | 事件驱动多智能体协作 |
-| 知识检索 | Chroma、Embedding、BM25、本地重排 |
-| 流式响应 | Server-Sent Events |
-| 后台任务 | 进程内任务队列与线程池 |
-| 文件与通知 | openpyxl、SMTP、MCP |
-| 部署 | Docker、Docker Compose |
+| 后端 | Python 3.11+、FastAPI、Uvicorn |
+| 前端 | 原生 HTML、CSS、JavaScript |
+| ORM 与业务数据库 | SQLAlchemy；默认 SQLite，可配置 MySQL/PyMySQL |
+| 短期与 Agent 私有记忆 | Redis；测试或 `memory://` 使用内存兼容 Store，连接失败时降级 |
+| 模型 | 确定性 Mock；OpenAI-compatible `/chat/completions` API；`bailian` 为兼容别名 |
+| 智能体编排 | `CoordinatorAgent` + 追加式 `CollaborationBlackboard` |
+| 知识检索 | Markdown、Chroma、FastEmbed BGE Embedding、BM25、BGE Cross-Encoder |
+| 流式协议 | Server-Sent Events；候选内容审查后才公开分片 |
+| 后台任务 | 数据库持久化 `tool_jobs` + 进程内轮询线程和分类线程池 |
+| 文件与通知 | openpyxl、SMTP/日志预警 |
+| 工具协议 | FastMCP stdio Server，5 个工具 |
+| 测试 | pytest/unittest、FastAPI TestClient、隔离 Engineering Harness、RAG Evaluation |
 
 ## 3. 总体架构
 
 ```mermaid
 flowchart LR
-    A[学生端 / 管理端] --> B[HTTP 层<br/>认证 + SSE]
-    B --> C[ChatService]
-    C --> D[AgentHarness]
-    D --> E[Agent Runtime]
-    E --> F[模型服务]
-    E --> K[知识检索]
-    D --> G[业务数据库]
-    D --> H[后台任务队列]
-    H --> I[Excel 台账]
-    H --> J[风险个案]
-    H --> L[邮件/日志预警]
+    Student[学生端 /student] --> API[FastAPI<br/>Bearer 鉴权 + SSE]
+    Admin[管理端 /admin] --> API
+    API --> Chat[ChatService]
+    Chat --> Harness[AgentHarness<br/>会话/脱敏/事务/事件]
+    Harness --> Runtime[CoordinatorAgent<br/>CollaborationBlackboard]
+    Runtime --> Model[Mock / OpenAI-compatible]
+    Runtime --> RAG[Chroma + BM25<br/>Embedding + Reranker]
+    Runtime --> Skills[skills/*/SKILL.md]
+    Harness --> DB[(SQLite / MySQL)]
+    Harness --> Memory[(Redis 可选缓存)]
+    Harness --> Queue[(tool_jobs)]
+    Queue --> Cases[风险个案]
+    Queue --> Alerts[SMTP / 日志预警]
 ```
 
-核心分层：
+代码边界：
 
-- `app/api`：HTTP 认证、请求 Schema 和 SSE，不编排聊天业务。
-- `app/services/chat.py`：只转发 AgentHarness 的公开事件。
-- `app/harness`：会话解析、输入脱敏、Runtime 调用、消息/报告/Trace 落库与工具计划。
-- `app/agents`：无 HTTP、无数据库依赖的事件驱动多 Agent Runtime。
-- `app/services`：模型网关、后台任务和工具执行服务。
-- `app/models.py`：数据库实体。
-- `app/schemas.py`：接口数据结构。
-- `app/static`：学生端、管理端和登录页面。
-- `app/agents/knowledge.py`：内置心理知识。
-- `skills`：标准心理支持规则。
+- `app/api`：认证、授权、请求校验、管理接口和 SSE 编码。
+- `app/services/chat.py`：只转发 `AgentHarness` 的公开事件。
+- `app/harness/agent_harness.py`：会话归属、幂等、脱敏、记忆装配、Runtime 调用、最终事务和工具计划。
+- `app/agents`：不访问 FastAPI 或 SQLAlchemy 的多智能体推理与黑板协议。
+- `app/memory`：短期记忆、Agent 私有记忆和审计 Trace。
+- `app/rag`：知识切块、向量/BM25 召回、融合、重排、扩展和评测。
+- `app/services/jobs.py`、`app/services/tool_dispatcher.py`、`app/tools/operations.py`：持久化任务和可复用业务操作。
+- `app/models.py`：当前数据库实体；项目没有独立 Repository 层或 Alembic 迁移目录。
+- `app/static`：学生端和管理端页面。
 
-## 4. 核心处理流程
+## 4. 单轮聊天流程
 
-学生发送消息后，系统依次完成：
+1. HTTP 层验证 Bearer Token、学生角色和请求 Schema，构造 `ChatCommand`。
+2. Harness 验证会话归属，并以 `(conversation_id, client_request_id)` 检查重复请求。
+3. 当前输入先做 PII 脱敏；短期历史从 Redis 读取，未命中或故障时从业务数据库回填。
+4. Harness 先保存 `status=generating` 的学生原始消息和脱敏副本。
+5. Coordinator 执行固定安全规则；Understanding、Safety、Context、Response Agent 通过黑板任务与 Artifact 完成规划。
+6. ResponseAgent 从 Provider 接收内部候选流；该流只产生内部进度事件，不直接发送给学生。
+7. SafetyAgent 审查完整候选；拒绝时最多修复一次，失败或超预算时采用固定回退回复。
+8. Harness 在最终事务中保存助手消息、Agent Run/Steps、协作事件、完整 Trace、心理报告和 `ToolJob`。
+9. 事务提交后更新 Redis/私有记忆并唤醒 Dispatcher；最终安全回复再按 28 个字符形成公开 `delta`，随后发送 `completed`。
 
-1. HTTP 层认证学生并把请求转换为 `ChatCommand`。
-2. ChatService 调用 AgentHarness，Harness 解析会话、检查幂等并脱敏模型输入。
-3. CoordinatorAgent 创建 CollaborationBlackboard；专业 Agent 按 capability claim task 并追加 artifact/message/event。
-4. Harness 消费 Provider 的内部模型流，Runtime 对完整候选执行安全审查。
-5. Harness 保存学生消息、助手消息、报告、智能体轨迹和持久化工具任务。
-6. ChatService 只把安全成品的公开事件交给 HTTP 层，通过 SSE 返回。
-7. 事务提交后异步写 Excel 台账、创建风险个案和发送预警。
+最终业务规则：
 
-普通交流跳过心理知识检索和心理报告。明确的自伤、自杀等高风险词由固定规则优先识别，不完全依赖模型。
+| `risk_level` | 心理 RAG | 报告 | SQL 台账 | 个案 | 预警 |
+|---|---:|---:|---:|---:|---:|
+| `CHAT` | 否 | 否 | 否 | 否 | 否 |
+| `CONSULT` | 是 | 是 | 是 | 否 | 否 |
+| `RISK` | 是，含固定安全主题/名额 | 是 | 是 | 是 | 是 |
 
-## 5. 多智能体模块
+## 5. 多智能体 Runtime
 
-Agent Runtime 采用事件驱动多智能体协作，由以下角色组成：
-
-| 智能体 | 职责 |
+| 组件 | 当前职责 |
 |---|---|
-| CoordinatorAgent | 创建 root task、派生缺失工作、控制预算并最终采纳 |
-| UnderstandingAgent | 判断意图和主题 |
-| SafetyAgent | 评估输入风险、发布安全覆盖并审查候选回复 |
-| ContextAgent | 加载记忆、知识和 Skills |
-| ResponseAgent | 生成候选回复，并在需要时执行一次修复 |
+| `CoordinatorAgent` | 创建 root task、执行固定规则、派生任务、控制预算、处理降级并发布 `FINAL_ADOPTED` |
+| `UnderstandingAgent` | 输出 `IntentAnalysis`；失败时使用固定规则意图 |
+| `SafetyAgent` | 对 `CONSULT/RISK` 输入做风险评估，并审查每版候选回复 |
+| `ContextAgent` | 使用预先构造的 `MemoryContext`，按最终风险触发 RAG 并选择 Skill |
+| `ResponseAgent` | 组装 Prompt、流式生成候选，并在审查拒绝时执行一次修复 |
 
-Agent 之间不互相调用方法。它们通过冻结的 AgentTask、AgentArtifact、AgentMessage、AgentEvent 和 AgentTurnResult 协作，历史只追加不覆盖。AgentHarness 只编排 Runtime 和业务副作用，不参与推理决策；Runtime 不读取数据库、不创建报告，也不调用业务工具。
+默认预算为 16 个协作轮次、7 次模型调用、55 秒单轮总时限、20 秒单次模型请求超时。风险顺序为 `CHAT < CONSULT < RISK`；固定规则命中的 `RISK` 不能被模型降级。
 
+## 6. 数据、记忆与审计
 
-## 6. 数据与记忆
+业务数据库当前保存：
 
-MySQL 保存：
+- `users`、`conversations`、`chat_messages`；
+- `psychological_reports`、`risk_cases`、`case_events`；
+- `ledger_entries`、`alert_deliveries`、`alert_events`；
+- `tool_jobs`、`dead_letter_records`；
+- `agent_runs`、`agent_steps`、`agent_collaboration_events`、`agent_run_traces`；
+- `audit_logs`。
 
-- 用户和角色。
-- 会话及完整消息。
-- 知识分块。
-- 心理报告和风险个案。
-- 个案备注。
-- 预警、Excel 和后台任务记录。
-- 智能体轨迹、死信和工具审计。
-- CollaborationBlackboard 追加式事件序列。
+知识 Chunk 不写入业务数据库：Markdown 位于 `data/knowledge`，向量写入 Chroma，Chunk 元数据和 BM25 索引保存在 RAG 服务进程内存中。
 
-Redis 使用 `mindbridge:short-term-memory:<session_public_id>` 保存最近 40 条脱敏消息，TTL 为 86400 秒。Redis 未命中或不可用时，从 MySQL `chat_messages` 回填最近 40 条。
+Redis 默认保存最近 40 条脱敏消息，TTL 86400 秒。模型上下文保留最近 8 条带角色原文并受 6000 字符预算限制；更早的已加载历史按确定性 4/3/1 规则形成最多 500 字符的 `memoryBrief`。各 Agent 使用 `agent:<AgentName>:<session_public_id>` 隔离私有记忆。
 
-长会话将较早历史按固定规则压缩为最多 500 字符的 `memoryBrief`：最多摘录最近 4 条学生关注、3 条助手支持和本轮输入；同时保留最近 8 条带角色脱敏原文作为受 6000 字符预算约束的 `modelHistory`。历史超过 8 条时摘要以 system 消息进入 Prompt，短历史则只保留角色化原文。手机号、邮箱和身份证号等信息在进入模型和短期记忆前进行脱敏。
-
-各 Agent 使用 `agent:<AgentName>:<session_public_id>` 隔离私有记忆；审计型记忆写入 `agent_run_traces`，不会回流到下一轮 Prompt。
+`agent_run_traces` 包含原始/脱敏输入、记忆、检索结果、完整 Tasks、Artifacts 和 Agent Messages。Artifact 中可能含回复 Prompt 与候选正文，因此 Trace 是高敏感审计数据，不是普通运行日志。
 
 ## 7. 知识检索
 
-内置知识以 Markdown 保存，应用启动时同步到数据库。
+RAG 只扫描 `data/knowledge` 第一层的 UTF-8 Markdown。默认流程：
 
-检索流程：
+1. 以 512 字符、64 字符重叠切块，并尽量在段落或中文标点边界结束。
+2. FastEmbed `BAAI/bge-small-zh-v1.5` 写入 512 维 Chroma Collection。
+3. 同时执行向量召回和 BM25，按 `0.75 / 0.25` 归一化融合。
+4. 使用 `BAAI/bge-reranker-base` Cross-Encoder 与融合分各占 `0.5` 重排。
+5. 扩展首个选中块的同文档前后块，并优先保留不同来源，默认返回 3 条。
+6. `RISK` 查询加入固定安全主题，并固定纳入《安全风险与危机支持边界》来源。
 
-1. 将文档切分为重叠文本块。
-2. 同时执行向量检索与 BM25 关键词检索。
-3. 融合两路得分并进行本地重排。
-4. 返回最相关内容及相邻上下文。
+索引在首次 `status()`、`retrieve()` 或 `rebuild()` 时懒加载；知识文件名、修改时间或大小变化会触发重建。Embedding/Reranker/Chroma 发生异常时，ContextAgent 捕获错误并降级到少量内置关键词知识。当前管理端只支持查看状态/来源和触发重建，不支持通过 API 上传、编辑、停用、删除知识或管理快照。
 
-管理员可上传 PDF、Markdown 和 TXT，重建向量索引并创建快照。
+## 8. SQL 台账、后台任务、个案与预警
 
-当向量服务不可用时，系统自动回退到 BM25 和本地词面检索；高风险安全判断不依赖知识库。
+Harness 在最终事务内创建以下持久化任务：
 
-## 8. 风险报告与后台任务
+```text
+CONSULT → 无后台任务
+RISK    → CASE_CREATE + ALERT_SEND
+              └───────────────↑ depends_on
+```
 
-处理规则：
+任务状态为 `PENDING / RUNNING / SUCCESS / DEAD`，具备唯一幂等键、优先级、依赖、指数退避、启动恢复和死信记录。生产式环境使用 `ThreadedToolDispatcher`；`app_env=test` 使用同步排空的 `InlineToolDispatcher`。
 
-| 场景 | 报告 | Excel | 个案 | 预警 |
-|---|---:|---:|---:|---:|
-| `CHAT` | 否 | 否 | 否 | 否 |
-| `CONSULT` | 是 | 是 | 否 | 否 |
-| `RISK` | 是 | 是 | 是 | 是 |
+- `PsychologicalReport` 保存台账详细数据，`LedgerEntry` 保存唯一登记标记，两者在最终结果事务中一起提交。
+- 管理员下载 Excel 时从 SQL 查询数据并在内存中即时生成响应，不维护常驻工作簿。
+- `CASE_CREATE` 仅处理 `RISK` 报告；同一报告最多一个个案。
+- `ALERT_SEND` 只有在个案任务成功后才能领取。
+- SMTP 基本配置不完整时使用 `log` 渠道；支持 STARTTLS 或隐式 SSL。
+- 预警线程池使用进程内每分钟滑动窗口限流，默认 10 次。
 
-后台任务具有幂等、依赖、重试和死信机制：
+FastMCP stdio Server 复用同一 `ToolOperations`，暴露建案、发预警、确认预警、追加个案备注和再次通知 5 个工具。
 
-- Excel 任务负责写入风险台账。
-- `RISK` 任务创建个案。
-- `RISK` 预警在个案创建成功后发送。
-- 任务多次失败后写入死信，供管理员处理。
-- 服务重启后会恢复未完成任务。
+## 9. 认证、授权与 CORS
 
-通知支持日志模式和 SMTP 邮件模式。关闭队列时，也可以通过 MCP 工具执行相同操作。
+- 密码使用 PBKDF2-HMAC-SHA256，随机 16 字节 Salt，默认 210,000 次迭代。
+- 登录返回自定义的 HMAC-SHA256 签名 Bearer Token，载荷包含用户公共 ID、角色和过期时间；它不是 JWT，默认有效期 8 小时。
+- 服务端每次请求都会复核用户存在、`status=active` 且角色与 Token 一致。
+- 当前仅有 `student`、`admin` 两种角色，没有更细的数据范围或组织级权限。
+- 当前没有服务端 logout、Token 撤销/刷新、登录失败锁定、MFA 或 SSO；前端退出只清除本地 Token。
+- CORS 当前 `allow_origins=[]`，只声明 GET/POST 与 Authorization/Content-Type；同源静态页面不依赖跨域访问。
 
-## 9. 认证与权限
+## 10. 当前 API
 
-接口登录后使用 Bearer Token，系统区分学生和管理员角色：
+公共与学生接口：
 
-- 学生可以查看个人资料、模型状态并发起聊天。
-- 管理员可以查看报告、个案、会话、知识库和运行记录。
-- 管理员账号不能发起学生聊天。
-- 会话与用户绑定，学生不能访问他人会话。
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/v1/auth/register/student` | 注册学生并直接返回 Token |
+| `POST` | `/api/v1/auth/login` | 学生或管理员登录 |
+| `GET` | `/api/v1/me` | 当前用户 |
+| `POST` | `/api/v1/conversations` | 创建学生会话 |
+| `GET` | `/api/v1/conversations` | 列出本人会话 |
+| `GET` | `/api/v1/conversations/{conversation_id}/messages` | 列出本人会话消息 |
+| `POST` | `/api/v1/conversations/{conversation_id}/messages:stream` | SSE 聊天 |
+| `GET` | `/health/live` | 存活状态 |
+| `GET` | `/health/ready` | 组件声明状态；当前不主动探测依赖 |
 
-当前密码摘要方式和默认演示账号仅适合本地演示；生产环境应更换为安全密码算法、正式登录会话和更严格的管理员认证。
+管理接口均要求 `admin`：
 
-## 10. 主要接口
-
-| 接口类型 | 主要能力 |
+| 分组 | 路径 |
 |---|---|
-| 健康检查 | 返回服务状态 |
-| 用户接口 | 当前资料、模型与智能体状态 |
-| 学生接口 | SSE 流式聊天、个人报告数据 |
-| 报告接口 | 报告列表和相关会话 |
-| 个案接口 | 个案列表、备注读取与新增 |
-| 知识库接口 | 上传、状态、重建和备份 |
-| 运维接口 | 工具任务、死信、智能体轨迹和工具审计 |
+| 用户 | `GET /api/v1/admin/users`、`POST /api/v1/admin/users/admins` |
+| 概览 | `GET /api/v1/admin/dashboard/summary` |
+| 报告 | `GET /api/v1/admin/reports`、`GET /api/v1/admin/reports/{report_id}/context` |
+| 个案 | `GET /api/v1/admin/cases`、`POST .../assign`、`POST .../notes`、`POST .../transitions`、`GET .../events` |
+| 审计 | `GET /api/v1/admin/audit-logs` |
+| 导出 | `GET /api/v1/admin/exports/{reports|cases|audit-logs}.xlsx` |
+| 预警/任务 | `GET /api/v1/admin/alerts`、`GET /api/v1/admin/job-groups`、`POST /api/v1/admin/job-groups/{report_id}/retry`；`GET /api/v1/admin/jobs` 保留为底层任务诊断接口 |
+| Agent | `GET /api/v1/admin/agent-runs`、`GET .../steps`、`GET .../events`、`GET .../trace` |
+| Skills | `GET /api/v1/admin/skills` |
+| 知识 | `GET /api/v1/admin/knowledge/status`、`GET .../sources`、`POST .../index/rebuild` |
 
-所有管理接口均要求管理员权限。
+报告接口当前只支持可选 `risk_level` 精确筛选；个案状态筛选、报告/个案分页由前端对已加载列表执行。审计日志接口支持服务端 action/resource/actor 筛选和分页。
 
 ## 11. 配置与部署
 
-主要配置分为：
+`app/core/config.py` 提供代码默认值；`.env.example` 是 MySQL + Redis 的完整基础设施示例，两者不能混为同一套默认配置。常用设置包括：
 
-- 模型 Provider、模型名称和生成参数。
-- 数据库和 Redis 连接。
-- 智能体运行模式与执行预算。
-- 知识分块、检索权重和向量库路径。
-- 后台任务并发、重试和限流。
-- Excel 路径和邮件通知参数。
+- `DATABASE_URL`、`REDIS_URL` 和 Redis 连接超时；
+- 短期/私有记忆条数、TTL 和上下文字符预算；
+- Embedding、Chroma、BM25 融合、Reranker 与 Top K；
+- 模型 Provider、模型名称、超时、重试、调用/轮次预算；
+- 工具 Worker 并发、重试、恢复和预警限流；
+- SMTP 主机、端口、认证、发件人、接收人、TLS/SSL；
+- 本地演示账号和 Token TTL（后者当前只在代码中定义）。
 
-Docker Compose 只启动 MySQL 和 Redis。Python 后端在宿主机通过 Uvicorn 运行并监听 `8080`，不构建进 Docker。
-
-本地开发可使用 Mock 模型；真实运行可切换到 Ollama 本地模型或 OpenAI-compatible API。
-
-## 12. 测试
-
-项目包含：
-
-- 单元测试：多智能体协议、记忆压缩、隐私脱敏、风险硬规则、Skills 和工具治理。
-- 工程 Harness：不启动 HTTP 即可验证脱敏、会话、聊天路由、消息/报告落库、Trace 和工具任务。
-- RAG 评测：输出 Recall@K、Precision@K、MRR、NDCG 和 Hit Rate。
-
-运行单元测试：
+`docker-compose.yml` 只启动 MySQL 8.4 和 Redis 7.4。Python 后端始终在宿主机运行，仓库没有后端 Dockerfile。轻量模式可直接使用默认 SQLite + Mock；完整模式复制 `.env.example` 后启动 MySQL/Redis，再运行：
 
 ```bash
-python -m unittest discover -s tests
+uvicorn app.main:app --reload --port 8080
 ```
 
-运行工程 Harness：
+应用 lifespan 会执行两段兼容迁移、`Base.metadata.create_all()`、演示账号 Seed、交接摘要回填并启动工具 Dispatcher。当前没有 Alembic 或独立生产迁移命令。
+
+## 12. 测试与评测
 
 ```bash
+# 全部测试
+python -m pytest -q
+
+# 六类隔离工程验证
 python -m app.harness.runner
+python -m app.harness.runner --json
+
+# RAG 回归与发布阈值
+python -m app.rag.evaluation
+python -m app.rag.evaluation --evaluate-answers --strict
 ```
 
-## 13. 技术注意事项
+Engineering Harness 使用临时 SQLite、内存 Redis 兼容 Store、Mock Provider、Hash Embedding 和关闭 Reranker 的临时 Chroma，因此不验证真实 MySQL、真实 Redis、BGE 模型或浏览器 UI。当前隔离环境没有显式清空从进程环境/`.env` 继承的 SMTP 配置；三项 SMTP 基本字段已配置时，`tool-queue` 套件可能尝试真实邮件连接，不能把该命令视为完全无外部副作用。仓库内当前 RAG 报告基于正式 BGE 配置，严格门禁仍因 Recall@3 未达到 0.95 而失败。
 
-- 生产环境应替换 Basic Auth、默认账号和简单密码摘要。
-- 工具治理策略需要确保真正接入每次任务执行。
-- 学生原始对话、报告和运行轨迹属于高敏感数据，应限制保存范围和访问权限。
-- 上传文件应增加大小、类型和内容安全限制。
-- 生产环境应限制 CORS 来源。
-- 向量库、Redis、邮件等外围能力故障时，不应阻断基础聊天和高风险安全回复。
+## 13. 当前实现边界
+
+- 项目用于本地开发和封闭演示，不应直接承载真实危机干预。
+- 管理端知识能力是只读状态/来源和重建，不包含上传、审核、发布、停用、删除或快照回滚。
+- 没有独立运营、咨询师、审计员角色，也没有资源级数据范围授权。
+- 没有服务端 Token 撤销/刷新、登录限速、MFA/SSO、CSRF/CSP 或正式密钥管理。
+- 数据库敏感正文和 Trace 当前未做字段级加密；按需 Excel 导出可能包含敏感原文或摘要。
+- readiness 返回声明性 `ready`，不探测数据库、Redis、模型或 RAG 的实时可用性。
+- 工具 Worker 和预警限流均在 Web 进程内；多应用副本场景尚未完成共享租约和共享限流设计。
+- 管理端可以按报告流程重新执行失败步骤，但尚无预警确认/再次通知 API；预警确认和再次通知目前只通过 MCP 业务操作暴露。
+- 当前没有独立的服务端取消 API 或协作式取消令牌；浏览器使用 `AbortController` 中止本次 HTTP 读取。
+- 真实模型、真实基础设施、浏览器 E2E、并发压测、备份恢复和专业人工评审仍需单独完成。

@@ -16,6 +16,7 @@ from app.models import (
     AgentRun,
     AgentStep,
     Conversation,
+    LedgerEntry,
     Message,
     PsychologicalReport,
     User,
@@ -77,13 +78,9 @@ class AgentHarness:
 
     @staticmethod
     def _tool_plan(result: AgentResult) -> list[str]:
-        if result.assessment.risk_level == "CHAT":
+        if result.assessment.risk_level != "RISK":
             return []
-        tools = ["ledger_write"]
-        if result.assessment.risk_level == "RISK":
-            tools.append("case_create")
-            tools.append("alert_send")
-        return tools
+        return ["case_create", "alert_send"]
 
     @staticmethod
     def _persist_trace(
@@ -380,6 +377,7 @@ class AgentHarness:
                 )
                 db.add(report)
                 db.flush()
+                db.add(LedgerEntry(report_id=report.id))
                 report.handoff_summary = self.runtime.skill_registry.render_handoff_summary(
                     report_id=report.public_id,
                     student_identity=f"{student.username}（{student.public_id}）",
