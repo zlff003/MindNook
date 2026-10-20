@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -17,6 +18,38 @@ class Settings(BaseSettings):
     memory_recent_messages: int = 8
     memory_brief_max_chars: int = 500
     memory_model_history_max_chars: int = 6000
+    # Recent messages are retained AFTER compaction, not a per-turn ceiling.
+    memory_enabled: bool = True
+    memory_summary_max_chars: int = Field(default=400, ge=100, le=2000)
+    memory_history_tokens: int = Field(default=6000, ge=128)
+    memory_batch_tokens: int = Field(default=5000, ge=128)
+    memory_page_size: int = Field(default=200, ge=20)
+    memory_foreground_max_batches: int = Field(default=3, ge=1)
+    memory_model_name: str = ""
+    memory_model_timeout_seconds: float = Field(default=60.0, gt=0)
+    memory_batch_retry_seconds: int = Field(default=60, ge=0)
+    memory_batch_max_attempts: int = Field(default=3, ge=1)
+    memory_foreground_model_calls: bool = False
+    memory_batch_max_messages: int = Field(default=8, ge=2, le=200)
+    memory_preference_tokens: int = Field(default=400, ge=0)
+    memory_raw_recall_tokens: int = Field(default=1600, ge=0)
+    memory_correction_tokens: int = Field(default=800, ge=0)
+    memory_raw_candidate_limit: int = Field(default=300, ge=10)
+    memory_model_output_tokens: int = Field(default=2048, ge=128)
+    memory_collection_name: str = "mindnook_user_memories"
+    memory_candidate_k: int = Field(default=8, ge=1)
+    memory_top_k: int = Field(default=3, ge=1, le=10)
+    memory_min_similarity: float = Field(default=0.45, ge=0, le=1)
+    memory_recall_tokens: int = Field(default=1000, ge=64)
+    memory_idle_seconds: int = Field(default=300, ge=0)
+    memory_worker_threads: int = Field(default=1, ge=1)
+    memory_turn_lease_seconds: int = Field(default=300, ge=30)
+    model_context_tokens: int = Field(default=16384, ge=1024)
+    model_output_tokens: int = Field(default=1024, ge=64)
+    model_context_margin_tokens: int = Field(default=512, ge=0)
+    model_context_reserve_tokens: int = Field(default=4096, ge=256)
+    # Per-model overrides: {"model-name": {"context_tokens": ..., "output_tokens": ...}}.
+    model_context_limits: dict[str, dict[str, int]] = Field(default_factory=dict)
     agent_private_memory_max_entries: int = 20
     agent_private_memory_ttl_seconds: int = 86400
 

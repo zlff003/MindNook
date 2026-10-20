@@ -39,6 +39,14 @@ class AgentTraceService:
         plan,
         result,
     ) -> AgentRunTrace:
+        artifacts = _jsonable(plan.blackboard.artifacts)
+        artifacts.append({"kind": "memory_context", "payload": {
+            "summary_version": memory_context.summary_version,
+            "summarized_until_message_id": memory_context.summarized_until_message_id,
+            "recalled_memories": memory_context.recalled_memories,
+            "background_incomplete": memory_context.background_incomplete,
+            "diagnostics": memory_context.diagnostics,
+        }})
         trace = AgentRunTrace(
             run_id=run.id,
             source_input=source_input,
@@ -50,7 +58,7 @@ class AgentTraceService:
             assessment_json=_dumps(result.assessment),
             collaboration_events_json=_dumps(plan.blackboard.events),
             tasks_json=_dumps(plan.blackboard.tasks),
-            artifacts_json=_dumps(plan.blackboard.artifacts),
+            artifacts_json=_dumps(artifacts),
             messages_json=_dumps(plan.blackboard.messages),
         )
         db.add(trace)

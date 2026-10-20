@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -69,6 +70,7 @@ class Conversation(Base):
 class Message(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
+        Index("ix_messages_memory_window", "conversation_id", "status", "id"),
         UniqueConstraint(
             "conversation_id",
             "client_request_id",
@@ -284,6 +286,7 @@ class ToolJob(Base):
         ForeignKey("tool_jobs.id"), nullable=True, index=True
     )
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=10)
     attempt_count: Mapped[int] = mapped_column("attempts", Integer, default=0)
@@ -335,4 +338,73 @@ class AuditLog(Base):
     resource_type: Mapped[str] = mapped_column(String(32))
     resource_public_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ConversationSummary(Base):
+    __tablename__ = "conversation_summaries"
+
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), primary_key=True)
+    summary_json: Mapped[str] = mapped_column(Text, default="[]")
+    summarized_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    extracted_until_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    turn_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    turn_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class UserMemory(Base):
+    __tablename__ = "user_memories"
+    __table_args__ = (
+        UniqueConstraint("student_id", "dedup_key", name="uq_user_memory_source"),
+        Index("ix_user_memories_owner_status", "student_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    public_id: Mapped[str] = mapped_column(String(36), default=new_public_id, unique=True, index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(String(32))
+    topics_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(24), default="active")
+    dedup_key: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    indexed_version: Mapped[int] = mapped_column(Integer, default=0)
+    index_signature: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MemoryBatch(Base):
+    """Stable work identity; a failed batch never advances a source cursor."""
+    __tablename__ = "memory_batches"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_key: Mapped[str] = mapped_column(String(191), unique=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    mode: Mapped[str] = mapped_column(String(24))
+    first_message_id: Mapped[int] = mapped_column(Integer)
+    last_message_id: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MemoryEvent(Base):
+    """Fact-scoped history. Old/new snapshots survive projection changes."""
+    __tablename__ = "memory_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(191), unique=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    source_message_id: Mapped[str] = mapped_column(String(36), index=True)
+    memory_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    relation: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), default="committed")
+    quote: Mapped[str] = mapped_column(Text)
+    before_json: Mapped[str] = mapped_column(Text, default="{}")
+    after_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

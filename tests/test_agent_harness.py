@@ -95,7 +95,10 @@ class AgentHarnessTests(unittest.TestCase):
     def _count(self, model) -> int:
         db = self.session_factory()
         try:
-            return db.scalar(select(func.count()).select_from(model)) or 0
+            query = select(func.count()).select_from(model)
+            if model is BackgroundJob:
+                query = query.where(BackgroundJob.report_id.is_not(None))
+            return db.scalar(query) or 0
         finally:
             db.close()
 

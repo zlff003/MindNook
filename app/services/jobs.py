@@ -6,7 +6,7 @@ import threading
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -33,6 +33,7 @@ DEAD = "DEAD"
 
 CASE_JOB_TYPES = {CASE_CREATE, CASE_NOTE_ADD, ALERT_ACK}
 ALERT_JOB_TYPES = {ALERT_SEND, ALERT_NOTIFY}
+MEMORY_JOB_TYPES = {"MEMORY_COMPACT", "MEMORY_EXTRACT", "MEMORY_RECONCILE", "MEMORY_INDEX_SYNC", "MEMORY_CALL"}
 
 
 def _payload(**values) -> str:
@@ -255,18 +256,19 @@ def claim_due_jobs(
                     continue
                 if dependency.status != SUCCESS:
                     continue
-            job.status = RUNNING
-            job.attempt_count += 1
-            job.locked_by = worker_id
-            job.locked_at = utc_now()
-            claimed.append(job.id)
+            # SQLite ignores FOR UPDATE; a conditional update is the actual claim.
+            result = db.execute(update(ToolJob).where(ToolJob.id == job.id, ToolJob.status == PENDING).values(
+                status=RUNNING, attempt_count=ToolJob.attempt_count + 1,
+                locked_by=worker_id, locked_at=utc_now()))
+            if result.rowcount == 1:
+                claimed.append(job.id)
         db.commit()
         return claimed
     finally:
         db.close()
 
 
-def mark_job_success(session_factory, job_id: int) -> None:
+def mark_job_success(session_factory, job_id: int, result: dict | None = None) -> None:
     db = session_factory()
     try:
         job = db.get(ToolJob, job_id)
@@ -275,6 +277,8 @@ def mark_job_success(session_factory, job_id: int) -> None:
             job.last_error = None
             job.locked_by = None
             job.locked_at = None
+            if result is not None:
+                job.result_json = json.dumps(result, ensure_ascii=False, default=str)
             db.commit()
     finally:
         db.close()
@@ -326,7 +330,7 @@ def mark_job_failure(
         db.close()
 
 
-def process_pending_jobs(session_factory, settings: Settings) -> None:
+def process_pending_jobs(session_factory, settings: Settings, memory_service=None) -> None:
     """Synchronous deterministic drain used by tests and the standalone Harness."""
     operations = ToolOperations(session_factory, settings)
     worker_id = worker_identity()
@@ -344,8 +348,11 @@ def process_pending_jobs(session_factory, settings: Settings) -> None:
                 job = db.get(ToolJob, job_id)
                 if not job:
                     continue
-                execute_tool_job(job, operations)
-                mark_job_success(session_factory, job_id)
+                if job.job_type in MEMORY_JOB_TYPES and memory_service is not None:
+                    result = memory_service.execute_job(db, job)
+                else:
+                    result = execute_tool_job(job, operations)
+                mark_job_success(session_factory, job_id, result)
             except Exception as exc:  # noqa: BLE001
                 mark_job_failure(
                     session_factory,

@@ -276,7 +276,8 @@ class OpenAICompatibleProviderContractTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(chunks, ["hello ", "world"])
+        self.assertEqual([str(chunk) for chunk in chunks if chunk], ["hello ", "world"])
+        self.assertEqual(chunks[-1].usage, {"completion_tokens": 2})
         self.assertTrue(captured["body"]["stream"])
         self.assertEqual(captured["purpose"], "response_generation")
 

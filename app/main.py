@@ -22,6 +22,7 @@ from app.memory.private import AgentPrivateMemory
 from app.memory.service import ShortTermMemoryService
 from app.memory.store import build_redis_store
 from app.memory.trace import AgentTraceService
+from app.memory.schema import migrate_memory_schema
 from app.rag.service import get_rag_service
 from app.services.chat import ChatService
 from app.services.model import build_model_provider
@@ -81,7 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rag_service=rag_service,
     )
     redis_store = build_redis_store(app_settings)
-    memory_service = ShortTermMemoryService(app_settings, redis_store)
+    memory_service = ShortTermMemoryService(app_settings, redis_store, model_provider)
     agent_private_memory = AgentPrivateMemory(app_settings, redis_store)
     trace_service = AgentTraceService()
     tool_dispatcher = (
@@ -105,14 +106,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         migrate_account_schema(engine)
         migrate_legacy_risk_levels(engine)
         Base.metadata.create_all(engine)
+        migrate_memory_schema(engine)
         _seed_demo_users(session_factory, app_settings)
         backfill_handoff_summaries(session_factory, agent_runtime.skill_registry)
         tool_dispatcher.start()
         yield
+        tool_dispatcher.close()
         close_provider = getattr(model_provider, "close", None)
         if callable(close_provider):
             close_provider()
-        tool_dispatcher.close()
         close_redis = getattr(redis_store, "close", None)
         if callable(close_redis):
             close_redis()

@@ -16,6 +16,7 @@ from app.agents.types import (
 )
 from app.core.config import Settings
 from app.services.model import ModelCallError, ModelMessage, ModelProvider, ModelResponse
+from app.services.context_budget import check_budget, estimate_tokens
 
 
 class AgentBudgetExceeded(RuntimeError):
@@ -31,6 +32,7 @@ class CollaborationBlackboard:
     """
 
     def __init__(self, settings: Settings, provider_name: str):
+        self.settings = settings
         self.started = time.perf_counter()
         self.deadline = self.started + settings.model_run_timeout_seconds
         self.max_calls = settings.model_max_calls_per_run
@@ -265,6 +267,7 @@ class CollaborationBlackboard:
         json_mode: bool,
     ) -> ModelResponse:
         self._check_budget()
+        check_budget(self.settings, messages, model)
         self.trace.model_calls += 1
         started = time.perf_counter()
         try:
@@ -314,9 +317,11 @@ class CollaborationBlackboard:
         temperature: float,
     ) -> Iterator[str]:
         self._check_budget()
+        check_budget(self.settings, messages, model)
         self.trace.model_calls += 1
         started = time.perf_counter()
         output_parts: list[str] = []
+        actual_usage = None
         try:
             for delta in provider.stream(
                 messages,
@@ -324,17 +329,20 @@ class CollaborationBlackboard:
                 temperature=temperature,
                 purpose=purpose,
             ):
+                if getattr(delta, "usage", None):
+                    actual_usage = delta.usage
                 output_parts.append(delta)
-                yield delta
+                if delta:
+                    yield str(delta)
             self._record_step(
                 AgentStepTrace(
                     step_name=purpose,
                     status="succeeded",
                     model_name=model,
                     latency_ms=max(1, int((time.perf_counter() - started) * 1000)),
-                    input_tokens=max(1, sum(len(item.content) for item in messages) // 4),
-                    output_tokens=max(1, len("".join(output_parts)) // 4),
-                    summary="以流式模式生成候选回复。",
+                    input_tokens=int(actual_usage.get("prompt_tokens", 0)) if actual_usage else sum(estimate_tokens(item.content) for item in messages),
+                    output_tokens=int(actual_usage.get("completion_tokens", 0)) if actual_usage else estimate_tokens("".join(output_parts)),
+                    summary="以流式模式生成候选回复；usage=" + ("provider" if actual_usage else "estimated") + "。",
                 ),
                 agent,
             )

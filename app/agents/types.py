@@ -42,6 +42,8 @@ class ContextBundle:
     constraints: list[str] = field(default_factory=list)
     memory_brief: str = ""
     model_history: list[dict[str, str]] = field(default_factory=list)
+    memory_diagnostics: dict = field(default_factory=dict)
+    recalled_memories: list[dict] = field(default_factory=list)
 
 
 @dataclass

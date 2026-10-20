@@ -396,7 +396,7 @@ class MindNookApiTests(unittest.TestCase):
 
         session = self.client.app.state.session_factory()
         try:
-            jobs = list(session.scalars(select(ToolJob).order_by(ToolJob.id.asc())))
+            jobs = list(session.scalars(select(ToolJob).where(ToolJob.report_id.is_not(None)).order_by(ToolJob.id.asc())))
             self.assertEqual(len(jobs), 2)
             self.assertEqual(jobs[1].depends_on_job_id, jobs[0].id)
             for job in jobs:

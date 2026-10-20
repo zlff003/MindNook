@@ -11,6 +11,7 @@ from app.memory.private import AgentPrivateMemory
 from app.memory.service import ShortTermMemoryService
 from app.memory.store import InMemoryRedisStore
 from app.memory.trace import AgentTraceService
+from app.memory.repository import ConversationBusy, acquire_turn, assert_turn, release_turn
 from app.models import (
     AgentCollaborationEvent,
     AgentRun,
@@ -65,7 +66,9 @@ class AgentHarness:
         self.memory_service = memory_service or ShortTermMemoryService(
             runtime.settings,
             fallback_store,
+            runtime.provider,
         )
+        self.tool_dispatcher.memory_service = self.memory_service
         self.agent_private_memory = agent_private_memory or AgentPrivateMemory(
             runtime.settings,
             fallback_store,
@@ -219,13 +222,19 @@ class AgentHarness:
     def run(self, command: ChatCommand) -> Iterator[HarnessEvent]:
         db = self.session_factory()
         user_message: Message | None = None
+        turn_token = None
+        conversation = None
         try:
             student, conversation = self._resolve_session(db, command)
+            # 请求幂等：避免重复消息
             duplicate_events = self._duplicate_events(db, command, conversation)
             if duplicate_events is not None:
                 yield from duplicate_events
                 return
 
+            turn_token = acquire_turn(db, conversation.id, self.runtime.settings.memory_turn_lease_seconds)
+
+            # 告诉前端请求已接收
             yield HarnessEvent(
                 "accepted",
                 {
@@ -234,15 +243,12 @@ class AgentHarness:
                 },
             )
 
+            # 隐私脱敏
             redacted = redact_pii(command.content.strip())
-            memory_context = self.memory_service.load(
-                db,
-                conversation,
-                current_input=redacted,
-            )
             private_memory = self.agent_private_memory.load_for_agents(
                 conversation.public_id
             )
+            # 先保存学生消息
             user_message = Message(
                 conversation_id=conversation.id,
                 sender_type="student",
@@ -257,7 +263,14 @@ class AgentHarness:
                 conversation.title = command.content.strip().replace("\n", " ")[:24]
             db.commit()
 
+            memory_context = self.memory_service.prepare_turn(
+                db, conversation, current_input=redacted, current_message=user_message)
+            assert_turn(db, conversation.id, turn_token, self.runtime.settings.memory_turn_lease_seconds)
+            db.commit()
+
+            # 多智能体制定计划
             yield HarnessEvent("status", {"stage": "reasoning"})
+            # 组织多智能体工作
             plan = self.runtime.plan(
                 redacted,
                 memory_context=memory_context,
@@ -299,6 +312,7 @@ class AgentHarness:
                 public=False,
             )
 
+            # 内部流式生成候选回复
             yield HarnessEvent("status", {"stage": "generating"})
             candidate_parts: list[str] = []
             received_characters = 0
@@ -342,6 +356,8 @@ class AgentHarness:
                 )
                 emitted_runtime_events += 1
 
+            # 保存助手回复和完整 Trace
+            assert_turn(db, conversation.id, turn_token, self.runtime.settings.memory_turn_lease_seconds)
             assistant_message = Message(
                 conversation_id=conversation.id,
                 sender_type="assistant",
@@ -362,6 +378,7 @@ class AgentHarness:
                 plan=plan,
                 result=result,
             )
+            # 根据风险等级产生工具计划
             tool_plan = self._tool_plan(result)
 
             report: PsychologicalReport | None = None
@@ -393,6 +410,8 @@ class AgentHarness:
                     tool_plan,
                     max_attempts=self.runtime.settings.tool_worker_max_attempts,
                 )
+            db.flush()
+            self.memory_service.enqueue_after_turn(db, conversation, user_message, assistant_message)
             db.commit()
             self.memory_service.append(conversation.public_id, user_message)
             self.memory_service.append(conversation.public_id, assistant_message)
@@ -401,9 +420,10 @@ class AgentHarness:
                 plan,
                 result,
             )
-            if tool_plan:
-                self.tool_dispatcher.dispatch()
+            # 启动工具执行
+            self.tool_dispatcher.dispatch()
 
+            # 向前端发送消息回复
             for chunk in self._public_chunks(result.response):
                 yield HarnessEvent("delta", {"text": chunk})
             yield HarnessEvent(
@@ -455,6 +475,10 @@ class AgentHarness:
                 },
                 public=False,
             )
+        except ConversationBusy:
+            db.rollback()
+            yield HarnessEvent("error", {"code": "CHAT_REQUEST_IN_PROGRESS",
+                                         "message": "该会话仍在处理上一条消息，请稍后重试。", "retryable": True})
         except LookupError:
             db.rollback()
             yield HarnessEvent(
@@ -481,4 +505,7 @@ class AgentHarness:
                 },
             )
         finally:
+            if turn_token is not None and conversation is not None:
+                db.rollback()
+                release_turn(db, conversation.id, turn_token)
             db.close()

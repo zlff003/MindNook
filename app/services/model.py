@@ -17,6 +17,14 @@ class ModelMessage:
     content: str
 
 
+class StreamText(str):
+    """String-compatible stream delta carrying request-local usage metadata."""
+    def __new__(cls, text: str, usage: dict | None = None):
+        instance = super().__new__(cls, text)
+        instance.usage = usage
+        return instance
+
+
 @dataclass(frozen=True)
 class ModelResponse:
     content: str
@@ -25,6 +33,7 @@ class ModelResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     request_id: str | None = None
+    finish_reason: str | None = None
 
 
 class ModelCallError(RuntimeError):
@@ -87,7 +96,10 @@ class MockModelProvider:
         student_message = self._student_message(messages)
         assessment = assess_message(student_message)
 
-        if purpose == "understanding":
+        if purpose.startswith("memory_"):
+            from app.memory.mock import mock_memory_update
+            content = json.dumps(mock_memory_update(json.loads(student_message)), ensure_ascii=False)
+        elif purpose == "understanding":
             content = json.dumps(
                 {
                     "risk_level": assessment.risk_level,
@@ -200,6 +212,7 @@ class OpenAICompatibleModelProvider:
         self.timeout = settings.model_timeout_seconds
         self.max_retries = max(0, settings.model_max_retries)
         self.json_mode_enabled = settings.model_json_mode
+        self.settings = settings
         self.client = client or httpx.Client(timeout=self.timeout)
 
     def complete(
@@ -225,6 +238,9 @@ class OpenAICompatibleModelProvider:
             "temperature": temperature,
             "stream": False,
         }
+        from app.services.context_budget import check_budget, output_limit
+        check_budget(self.settings, messages, model, memory=purpose.startswith("memory_"))
+        payload["max_tokens"] = output_limit(self.settings, model, memory=purpose.startswith("memory_"))
         if json_mode and self.json_mode_enabled:
             payload["response_format"] = {"type": "json_object"}
 
@@ -240,7 +256,7 @@ class OpenAICompatibleModelProvider:
                         "X-MindNook-Purpose": purpose,
                     },
                     json=payload,
-                    timeout=self.timeout,
+                    timeout=self.settings.memory_model_timeout_seconds if purpose.startswith("memory_") else self.timeout,
                 )
                 if response.status_code >= 400:
                     retryable = response.status_code in {408, 409, 429} or response.status_code >= 500
@@ -260,6 +276,7 @@ class OpenAICompatibleModelProvider:
                     output_tokens=int(usage.get("completion_tokens") or 0),
                     request_id=response.headers.get("x-request-id")
                     or body.get("id"),
+                    finish_reason=body["choices"][0].get("finish_reason"),
                 )
             except ModelCallError as exc:
                 last_error = exc
@@ -305,6 +322,9 @@ class OpenAICompatibleModelProvider:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        from app.services.context_budget import check_budget, output_limit
+        check_budget(self.settings, messages, model)
+        payload["max_tokens"] = output_limit(self.settings, model)
         try:
             with self.client.stream(
                 "POST",
@@ -331,6 +351,8 @@ class OpenAICompatibleModelProvider:
                         break
                     try:
                         body = json.loads(data)
+                        if body.get("usage"):
+                            yield StreamText("", body["usage"])
                         choices = body.get("choices") or []
                         if not choices:
                             # OpenAI-compatible providers may send a final usage-only

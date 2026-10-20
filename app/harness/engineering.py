@@ -220,7 +220,7 @@ def _run_risk_safety() -> list[CheckResult]:
         db = env.session_factory()
         try:
             report = db.scalar(select(PsychologicalReport))
-            jobs = list(db.scalars(select(ToolJob).order_by(ToolJob.id)))
+            jobs = list(db.scalars(select(ToolJob).where(ToolJob.report_id.is_not(None)).order_by(ToolJob.id)))
             checks = [
                 _check(
                     "high-risk-detection",

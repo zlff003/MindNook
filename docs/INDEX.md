@@ -16,6 +16,11 @@
 | [Engineering Harness](./ENGINEERING_HARNESS.md) | 一键工程验证 | 验证 Risk Safety、Agent Routing、Standard Skills、RAG、API 和 Tool Queue |
 | [心理场景 Skill 系统](./SKILLS.md) | 可维护的心理表达规则资产 | 理解 Skill 文件规范、路由、状态校验、安全降级和交接摘要 |
 | [上下文与分层记忆](./MEMORY.md) | 记忆与 Prompt 上下文实现 | 理解 Redis/MySQL 回填、压缩、私有记忆和审计记忆 |
+| [简要记忆升级方案](./MEMORY_UPGRADE_PLAN.md) | 记忆升级设计基线 | 理解最近原文、会话摘要和相关长期记忆的读写与召回 |
+| [Memory 测试方案](./MEMORY_TEST_PLAN.md) | 测试前制定的验收矩阵 | 查看隔离环境、边界与故障注入、回归命令 |
+| [Memory 测试结果](./MEMORY_TEST_RESULTS.md) | 本次执行记录 | 查看通过数量、发现的问题与未验证范围 |
+| [长对话可靠性测试方案](./MEMORY_RELIABILITY_TEST_PLAN.md) | 真实失败回放与后台流程验证 | 查看来源错配、更正误伤、原文回退、迁移测试 |
+| [长对话可靠性修复结果](./MEMORY_RELIABILITY_RESULTS.md) | 本轮变更及复测记录 | 查看具体文件、离线测试、真实 API 复测与剩余限制 |
 | [RAG 模块](./RAG.md) | 本地混合检索实现 | 理解知识切块、索引、召回、融合、重排和评测 |
 | [MCP 与异步工具队列](./MCP_AND_TOOL_QUEUE.md) | 后台副作用实现 | 理解任务 DAG、幂等、重试、限流、死信和 MCP |
 

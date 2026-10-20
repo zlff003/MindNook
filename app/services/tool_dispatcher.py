@@ -11,6 +11,7 @@ from app.models import ToolJob
 from app.services.jobs import (
     ALERT_JOB_TYPES,
     CASE_JOB_TYPES,
+    MEMORY_JOB_TYPES,
     claim_due_jobs,
     execute_tool_job,
     mark_job_failure,
@@ -32,16 +33,17 @@ class InlineToolDispatcher:
     def __init__(self, session_factory, settings: Settings):
         self.session_factory = session_factory
         self.settings = settings
+        self.memory_service = None
 
     def start(self) -> None:
         recover_stale_jobs(
             self.session_factory,
             self.settings.tool_worker_running_timeout_seconds,
-            recover_all=True,
+            recover_all=False,
         )
 
     def dispatch(self) -> None:
-        process_pending_jobs(self.session_factory, self.settings)
+        process_pending_jobs(self.session_factory, self.settings, self.memory_service)
 
     def close(self) -> None:
         return None
@@ -75,6 +77,7 @@ class ThreadedToolDispatcher:
         self.settings = settings
         settings = self.settings
         self.operations = ToolOperations(session_factory, settings)
+        self.memory_service = None
         self.worker_id = worker_identity()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -93,6 +96,8 @@ class ThreadedToolDispatcher:
             max_workers=max(1, settings.tool_worker_alert_workers),
             thread_name_prefix="mindnook-alert",
         )
+        self._memory_executor = ThreadPoolExecutor(
+            max_workers=settings.memory_worker_threads, thread_name_prefix="mindnook-memory")
         self._poller = threading.Thread(
             target=self._poll_loop,
             name="mindnook-tool-dispatcher",
@@ -106,7 +111,7 @@ class ThreadedToolDispatcher:
             recover_stale_jobs(
                 self.session_factory,
                 self.settings.tool_worker_running_timeout_seconds,
-                recover_all=True,
+                recover_all=False,
             )
             self._started = True
             self._poller.start()
@@ -116,6 +121,8 @@ class ThreadedToolDispatcher:
         self._wake.set()
 
     def _executor_for(self, job_type: str) -> ThreadPoolExecutor:
+        if job_type in MEMORY_JOB_TYPES:
+            return self._memory_executor
         if job_type in CASE_JOB_TYPES:
             return self._case_executor
         if job_type in ALERT_JOB_TYPES:
@@ -177,8 +184,11 @@ class ThreadedToolDispatcher:
             job = db.get(ToolJob, job_id)
             if not job:
                 return
-            execute_tool_job(job, self.operations)
-            mark_job_success(self.session_factory, job_id)
+            if job.job_type in MEMORY_JOB_TYPES and self.memory_service is not None:
+                result = self.memory_service.execute_job(db, job)
+            else:
+                result = execute_tool_job(job, self.operations)
+            mark_job_success(self.session_factory, job_id, result)
         except Exception as exc:  # noqa: BLE001
             mark_job_failure(
                 self.session_factory,
@@ -201,3 +211,4 @@ class ThreadedToolDispatcher:
             self._poller.join(timeout=max(1.0, self.settings.tool_worker_poll_seconds + 1))
         self._case_executor.shutdown(wait=True, cancel_futures=False)
         self._alert_executor.shutdown(wait=True, cancel_futures=False)
+        self._memory_executor.shutdown(wait=True, cancel_futures=False)

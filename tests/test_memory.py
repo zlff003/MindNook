@@ -123,7 +123,7 @@ class LayeredMemoryTests(unittest.TestCase):
         finally:
             db.close()
 
-    def test_redis_miss_backfills_latest_40_then_next_read_hits_cache(self):
+    def test_redis_tail_does_not_hide_unprocessed_history_older_than_40(self):
         self._seed_messages(45)
         settings = memory_settings()
         store = InMemoryRedisStore()
@@ -137,23 +137,20 @@ class LayeredMemoryTests(unittest.TestCase):
         finally:
             db.close()
 
-        key = f"mindbridge:short-term-memory:{self.session_public_id}"
+        key = service.key(self.session_public_id)
         self.assertEqual(database_count, 45)
         self.assertEqual(Message.__tablename__, "chat_messages")
-        self.assertEqual(first.source, "mysql")
+        self.assertEqual(first.source, "database")
         self.assertFalse(first.cache_hit)
         self.assertEqual(first.cached_messages, 40)
-        self.assertEqual(second.source, "redis")
-        self.assertTrue(second.cache_hit)
+        self.assertEqual(second.source, "database")
+        self.assertFalse(second.cache_hit)
         self.assertEqual(len(store.lrange(key, 0, -1)), 40)
         self.assertGreater(store.ttl(key), 86000)
-        self.assertEqual(len(first.model_history), 8)
+        self.assertEqual(len(first.model_history), 45)
         self.assertEqual(first.model_history[-1].content, "第 44 条历史消息")
-        self.assertTrue(first.history_compressed)
-        self.assertIn("学生近期关注", first.memory_brief)
-        self.assertIn("第 36 条历史消息", first.memory_brief)
-        self.assertNotIn("第 28 条历史消息", first.memory_brief)
-        self.assertIn("本轮输入关注：这轮想讨论复习计划", first.memory_brief)
+        self.assertFalse(first.history_compressed)
+        self.assertEqual(first.memory_brief, "")
 
     def test_model_history_keeps_latest_eight_with_role_and_char_budget(self):
         settings = memory_settings(memory_model_history_max_chars=280)
@@ -319,7 +316,7 @@ class LayeredMemoryTests(unittest.TestCase):
         finally:
             db.close()
 
-        self.assertEqual(context.source, "mysql")
+        self.assertEqual(context.source, "database")
         self.assertFalse(context.cache_hit)
         self.assertEqual(len(context.model_history), 3)
 

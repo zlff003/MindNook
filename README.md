@@ -250,6 +250,14 @@ MindNook/
 └── docker-compose.yml   # MySQL 与 Redis
 ```
 
+## 📚 项目文档
+
+- [文档索引](docs/INDEX.md)
+- [当前上下文与分层记忆实现](docs/MEMORY.md)
+- [简要记忆升级设计](docs/MEMORY_UPGRADE_PLAN.md)
+- [Memory 测试方案](docs/MEMORY_TEST_PLAN.md)与[测试结果](docs/MEMORY_TEST_RESULTS.md)
+- [长对话记忆可靠性修复测试方案](docs/MEMORY_RELIABILITY_TEST_PLAN.md)与[修复结果及文件清单](docs/MEMORY_RELIABILITY_RESULTS.md)
+
 ## 🔌 MCP 工具
 
 启动 stdio MCP Server，或使用示例客户端按风险等级执行报告工具链：
